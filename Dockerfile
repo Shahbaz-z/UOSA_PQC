@@ -3,11 +3,11 @@ FROM python:3.11-slim
 # Install build dependencies for liboqs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake ninja-build gcc g++ \
-    libssl-dev git ca-certificates \
+    libssl-dev git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install liboqs
-RUN git clone --depth 1 --branch 0.10.1 \
+# Build and install liboqs (pinned to 0.12.0 to match liboqs-python==0.12.0)
+RUN git clone --depth 1 --branch 0.12.0 \
         https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs \
     && cd /tmp/liboqs \
     && mkdir build && cd build \
