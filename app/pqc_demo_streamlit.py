@@ -38,7 +38,7 @@ from app.components.charts import (
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Post-Quantum Cryptography Demo",
-    page_icon=":locked_with_key:",
+    page_icon="🔐",
     layout="wide",
 )
 
@@ -47,7 +47,7 @@ if MOCK_MODE:
     st.warning(
         "Running in **mock mode** (liboqs not available). "
         "Artifact sizes are accurate but timing data is synthetic.",
-        icon=":warning:",
+        icon="⚠️",
     )
 
 # ---------------------------------------------------------------------------
