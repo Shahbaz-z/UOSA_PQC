@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install liboqs (pinned to 0.12.0 to match liboqs-python==0.12.0)
-RUN git clone --depth 1 --branch 0.12.0 \
+# Build and install liboqs (0.14.0 to match liboqs-python 0.14.x)
+RUN git clone --depth 1 --branch 0.14.0 \
         https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs \
     && cd /tmp/liboqs \
     && mkdir build && cd build \
