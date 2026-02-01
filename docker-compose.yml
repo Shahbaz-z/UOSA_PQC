@@ -1,0 +1,19 @@
+services:
+  pqc-demo:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - PQC_MOCK=0
+    volumes:
+      - ./benchmarks/results:/app/benchmarks/results
+
+  # Run with mock mode (no liboqs required)
+  pqc-demo-mock:
+    build: .
+    ports:
+      - "8502:8501"
+    environment:
+      - PQC_MOCK=1
+    profiles:
+      - mock
