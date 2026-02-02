@@ -1,8 +1,8 @@
-"""Dilithium + Ed25519 signature wrapper with automatic mock fallback.
+"""PQC signature wrapper with automatic mock fallback.
 
-Supports Dilithium2/3/5 via liboqs-python and Ed25519 via PyNaCl.
-Hybrid mode concatenates Ed25519 + Dilithium signatures (sign-with-both,
-verify-both).
+Supports Dilithium2/3/5, ML-DSA-44/65/87, Falcon-512/1024 via
+liboqs-python and Ed25519 via PyNaCl.  Hybrid mode concatenates
+Ed25519 + PQC signatures (sign-with-both, verify-both).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from pqc_lib.mock import MOCK_MODE, SIG_PARAMS, ED25519_PARAMS
+from pqc_lib.mock import MOCK_MODE, SIG_PARAMS, ED25519_PARAMS, HYBRIDABLE_SIGS
 from pqc_lib.utils import timed_call
 
 if not MOCK_MODE:
@@ -25,8 +25,8 @@ else:
 
 SIG_ALGORITHMS = list(SIG_PARAMS.keys()) + ["Ed25519"]
 
-# Add hybrid algorithms
-HYBRID_ALGORITHMS = [f"Hybrid-Ed25519+{d}" for d in SIG_PARAMS]
+# Add hybrid algorithms for all hybridable PQC sigs
+HYBRID_ALGORITHMS = [f"Hybrid-Ed25519+{s}" for s in HYBRIDABLE_SIGS]
 SIG_ALGORITHMS += HYBRID_ALGORITHMS
 
 

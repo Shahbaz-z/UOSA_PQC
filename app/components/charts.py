@@ -27,7 +27,7 @@ def benchmark_bar_chart(df: pd.DataFrame, title: str = "Benchmark Results") -> g
     return fig
 
 
-def block_space_chart(analyses: List[BlockAnalysis]) -> go.Figure:
+def block_space_chart(analyses: List[BlockAnalysis], chain: str = "Solana") -> go.Figure:
     """Horizontal bar chart showing txs_per_block for each signature type."""
     df = pd.DataFrame([
         {
@@ -44,18 +44,18 @@ def block_space_chart(analyses: List[BlockAnalysis]) -> go.Figure:
         orientation="h",
         color="Signature Size (B)",
         color_continuous_scale="RdYlGn_r",
-        title="Solana Block Capacity by Signature Scheme",
+        title=f"{chain} Block Capacity by Signature Scheme",
     )
     fig.update_layout(yaxis={"categoryorder": "total ascending"})
     return fig
 
 
-def throughput_comparison_chart(analyses: List[BlockAnalysis]) -> go.Figure:
-    """Bar chart of relative throughput vs Ed25519."""
+def throughput_comparison_chart(analyses: List[BlockAnalysis], chain: str = "Solana") -> go.Figure:
+    """Bar chart of relative throughput vs baseline."""
     df = pd.DataFrame([
         {
             "Signature": a.signature_type,
-            "Relative Throughput": a.relative_to_ed25519,
+            "Relative Throughput": a.relative_to_baseline,
             "TPS": a.throughput_tps,
         }
         for a in analyses
@@ -66,7 +66,7 @@ def throughput_comparison_chart(analyses: List[BlockAnalysis]) -> go.Figure:
         y="Relative Throughput",
         color="TPS",
         color_continuous_scale="Viridis",
-        title="Throughput Relative to Ed25519 (1.0 = parity)",
+        title=f"{chain}: Throughput Relative to Baseline (1.0 = parity)",
         text="Relative Throughput",
     )
     fig.update_traces(texttemplate="%{text:.1%}", textposition="outside")
@@ -74,7 +74,7 @@ def throughput_comparison_chart(analyses: List[BlockAnalysis]) -> go.Figure:
     return fig
 
 
-def signature_size_comparison(analyses: List[BlockAnalysis]) -> go.Figure:
+def signature_size_comparison(analyses: List[BlockAnalysis], chain: str = "Solana") -> go.Figure:
     """Stacked bar showing signature vs base overhead per transaction."""
     data = []
     for a in analyses:
@@ -87,7 +87,29 @@ def signature_size_comparison(analyses: List[BlockAnalysis]) -> go.Figure:
         x="Signature Scheme",
         y="Bytes",
         color="Component",
-        title="Transaction Size Breakdown",
+        title=f"{chain}: Transaction Size Breakdown",
         barmode="stack",
+    )
+    return fig
+
+
+def side_by_side_sig_chart(results: dict) -> go.Figure:
+    """Side-by-side comparison chart for selected algorithms.
+
+    *results*: dict mapping algorithm name to SignResult-like objects
+    with .signature_size and .time_ms attributes.
+    """
+    data = []
+    for algo, sr in results.items():
+        data.append({"Algorithm": algo, "Metric": "Signature Size (B)", "Value": sr.signature_size})
+        data.append({"Algorithm": algo, "Metric": "Sign Time (ms)", "Value": sr.time_ms})
+    df = pd.DataFrame(data)
+    fig = px.bar(
+        df,
+        x="Algorithm",
+        y="Value",
+        color="Metric",
+        barmode="group",
+        title="Side-by-Side Algorithm Comparison",
     )
     return fig

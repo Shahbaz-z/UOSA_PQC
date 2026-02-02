@@ -45,6 +45,25 @@ KEM_PARAMS = {
         "ciphertext": 1568,
         "shared_secret": 32,
     },
+    # FIPS 203 (ML-KEM) – identical parameters to Kyber, standardized names
+    "ML-KEM-512": {
+        "public_key": 800,
+        "secret_key": 1632,
+        "ciphertext": 768,
+        "shared_secret": 32,
+    },
+    "ML-KEM-768": {
+        "public_key": 1184,
+        "secret_key": 2400,
+        "ciphertext": 1088,
+        "shared_secret": 32,
+    },
+    "ML-KEM-1024": {
+        "public_key": 1568,
+        "secret_key": 3168,
+        "ciphertext": 1568,
+        "shared_secret": 32,
+    },
 }
 
 SIG_PARAMS = {
@@ -63,6 +82,33 @@ SIG_PARAMS = {
         "secret_key": 4864,
         "signature": 4595,
     },
+    # FIPS 204 (ML-DSA) – identical parameters to Dilithium, standardized names
+    "ML-DSA-44": {
+        "public_key": 1312,
+        "secret_key": 2528,
+        "signature": 2420,
+    },
+    "ML-DSA-65": {
+        "public_key": 1952,
+        "secret_key": 4000,
+        "signature": 3293,
+    },
+    "ML-DSA-87": {
+        "public_key": 2592,
+        "secret_key": 4864,
+        "signature": 4595,
+    },
+    # Falcon (NIST PQC Round 3 alternate, compact signatures)
+    "Falcon-512": {
+        "public_key": 897,
+        "secret_key": 1281,
+        "signature": 666,
+    },
+    "Falcon-1024": {
+        "public_key": 1793,
+        "secret_key": 2305,
+        "signature": 1280,
+    },
 }
 
 ED25519_PARAMS = {
@@ -70,6 +116,13 @@ ED25519_PARAMS = {
     "secret_key": 64,
     "signature": 64,
 }
+
+# Algorithms that support hybrid mode (Ed25519 + PQC)
+HYBRIDABLE_SIGS = [
+    "Dilithium2", "Dilithium3", "Dilithium5",
+    "ML-DSA-44", "ML-DSA-65", "ML-DSA-87",
+    "Falcon-512", "Falcon-1024",
+]
 
 
 def _deterministic_bytes(label: str, length: int) -> bytes:
