@@ -7,6 +7,7 @@ from typing import List
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from blockchain.solana_model import BlockAnalysis
 
@@ -23,7 +24,11 @@ def benchmark_bar_chart(df: pd.DataFrame, title: str = "Benchmark Results") -> g
         title=title,
         labels={"mean_ms": "Time (ms)", "algorithm": "Algorithm"},
     )
-    fig.update_layout(legend_title_text="Operation")
+    fig.update_layout(
+        legend_title_text="Operation",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis_tickangle=-45,
+    )
     return fig
 
 
@@ -46,7 +51,10 @@ def block_space_chart(analyses: List[BlockAnalysis], chain: str = "Solana") -> g
         color_continuous_scale="RdYlGn_r",
         title=f"{chain} Block Capacity by Signature Scheme",
     )
-    fig.update_layout(yaxis={"categoryorder": "total ascending"})
+    fig.update_layout(
+        yaxis={"categoryorder": "total ascending"},
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
     return fig
 
 
@@ -70,7 +78,11 @@ def throughput_comparison_chart(analyses: List[BlockAnalysis], chain: str = "Sol
         text="Relative Throughput",
     )
     fig.update_traces(texttemplate="%{text:.1%}", textposition="outside")
-    fig.update_layout(yaxis_tickformat=".0%")
+    fig.update_layout(
+        yaxis_tickformat=".0%",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis_tickangle=-45,
+    )
     return fig
 
 
@@ -90,26 +102,61 @@ def signature_size_comparison(analyses: List[BlockAnalysis], chain: str = "Solan
         title=f"{chain}: Transaction Size Breakdown",
         barmode="stack",
     )
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis_tickangle=-45,
+    )
     return fig
 
 
-def side_by_side_sig_chart(results: dict) -> go.Figure:
-    """Side-by-side comparison chart for selected algorithms.
+def side_by_side_dual_axis_chart(results: dict) -> go.Figure:
+    """Dual-axis comparison chart: signature size (left axis) and sign time (right axis).
+
+    Uses separate y-axes so bytes and milliseconds are not conflated on a single scale.
 
     *results*: dict mapping algorithm name to SignResult-like objects
     with .signature_size and .time_ms attributes.
     """
-    data = []
-    for algo, sr in results.items():
-        data.append({"Algorithm": algo, "Metric": "Signature Size (B)", "Value": sr.signature_size})
-        data.append({"Algorithm": algo, "Metric": "Sign Time (ms)", "Value": sr.time_ms})
-    df = pd.DataFrame(data)
-    fig = px.bar(
-        df,
-        x="Algorithm",
-        y="Value",
-        color="Metric",
-        barmode="group",
-        title="Side-by-Side Algorithm Comparison",
+    algos = list(results.keys())
+    sizes = [results[a].signature_size for a in algos]
+    times = [results[a].time_ms for a in algos]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Bar(
+            name="Signature Size (bytes)",
+            x=algos,
+            y=sizes,
+            marker_color="steelblue",
+            opacity=0.8,
+            text=[f"{s:,} B" for s in sizes],
+            textposition="outside",
+        ),
+        secondary_y=False,
     )
+
+    fig.add_trace(
+        go.Scatter(
+            name="Sign Time (ms)",
+            x=algos,
+            y=times,
+            mode="lines+markers+text",
+            marker=dict(size=10, color="tomato"),
+            line=dict(color="tomato", width=2),
+            text=[f"{t:.3f}" for t in times],
+            textposition="top center",
+        ),
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        title="Algorithm Comparison: Signature Size vs Sign Time",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_tickangle=-45,
+    )
+    fig.update_yaxes(title_text="Signature Size (bytes)", secondary_y=False)
+    fig.update_yaxes(title_text="Sign Time (ms)", secondary_y=True)
+
     return fig
