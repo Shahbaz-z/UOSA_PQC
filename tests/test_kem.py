@@ -1,4 +1,4 @@
-"""Tests for pqc_lib.kem – Kyber / ML-KEM wrapper."""
+"""Tests for pqc_lib.kem -- ML-KEM (FIPS 203) wrapper."""
 
 import pytest
 
@@ -53,25 +53,26 @@ def test_invalid_algorithm():
         keygen("NotAnAlgorithm")
 
 
+def test_kyber_draft_names_removed():
+    """Kyber draft names should not be in the algorithm list (ML-KEM only)."""
+    for algo in KEM_ALGORITHMS:
+        assert not algo.startswith("Kyber"), f"Draft name {algo} found; use ML-KEM instead"
+
+
 class TestKEMNegative:
-    """Negative test cases – wrong keys, tampered ciphertext."""
+    """Negative test cases."""
 
     def test_different_keypairs_different_secrets(self):
-        """Decapsulating with a different secret key produces different shared secret."""
-        kp1 = keygen("Kyber512")
-        kp2 = keygen("Kyber512")
-        enc = encaps("Kyber512", kp1.public_key)
-        dec_wrong = decaps("Kyber512", kp2.secret_key, enc.ciphertext)
-        # In mock mode both return deterministic values, so this only
-        # applies meaningfully in real mode. In mock mode the shared
-        # secrets will match because mock_kem_decaps ignores the key.
-        # We still exercise the code path.
+        kp1 = keygen("ML-KEM-512")
+        kp2 = keygen("ML-KEM-512")
+        enc = encaps("ML-KEM-512", kp1.public_key)
+        dec_wrong = decaps("ML-KEM-512", kp2.secret_key, enc.ciphertext)
         assert isinstance(dec_wrong.shared_secret, bytes)
         assert len(dec_wrong.shared_secret) == 32
 
-    def test_ml_kem_matches_kyber_sizes(self):
-        """ML-KEM-512 and Kyber512 should produce same-sized artifacts."""
-        kp_kyber = keygen("Kyber512")
-        kp_mlkem = keygen("ML-KEM-512")
-        assert len(kp_kyber.public_key) == len(kp_mlkem.public_key)
-        assert len(kp_kyber.secret_key) == len(kp_mlkem.secret_key)
+    def test_all_ml_kem_variants_present(self):
+        """All three ML-KEM security levels should be available."""
+        assert "ML-KEM-512" in KEM_ALGORITHMS
+        assert "ML-KEM-768" in KEM_ALGORITHMS
+        assert "ML-KEM-1024" in KEM_ALGORITHMS
+        assert len(KEM_ALGORITHMS) == 3

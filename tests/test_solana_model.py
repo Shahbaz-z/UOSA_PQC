@@ -1,4 +1,4 @@
-"""Tests for blockchain.solana_model – Solana and Bitcoin block-space analysis."""
+"""Tests for blockchain.solana_model -- Solana, Bitcoin, and Ethereum block-space analysis."""
 
 import pytest
 
@@ -6,17 +6,24 @@ from blockchain.solana_model import (
     analyze_block_space,
     analyze_solana_block_space,
     analyze_bitcoin_block_space,
+    analyze_ethereum_block_space,
     compare_all,
     compare_all_solana,
     compare_all_bitcoin,
+    compare_all_ethereum,
     SIGNATURE_SIZES,
     SOLANA_SIG_TYPES,
     BITCOIN_SIG_TYPES,
+    ETHEREUM_SIG_TYPES,
     SOLANA_BLOCK_SIZE_BYTES,
     SOLANA_BASE_TX_OVERHEAD,
     BITCOIN_BLOCK_WEIGHT_LIMIT,
     BITCOIN_BASE_TX_OVERHEAD,
     BITCOIN_WITNESS_DISCOUNT,
+    ETHEREUM_BLOCK_GAS_LIMIT,
+    ETHEREUM_BASE_TX_GAS,
+    ETHEREUM_CALLDATA_GAS_PER_BYTE,
+    ETHEREUM_BASE_TX_OVERHEAD,
 )
 
 
@@ -27,16 +34,23 @@ class TestSolanaBlockSpace:
         assert result.tx_size_bytes == SOLANA_BASE_TX_OVERHEAD + 64
         assert result.relative_to_baseline == 1.0
 
-    def test_dilithium3_smaller_throughput(self):
+    def test_ml_dsa_65_smaller_throughput(self):
         ed = analyze_solana_block_space("Ed25519")
-        d3 = analyze_solana_block_space("Dilithium3")
+        d3 = analyze_solana_block_space("ML-DSA-65")
         assert d3.txs_per_block < ed.txs_per_block
         assert d3.relative_to_baseline < 1.0
 
-    def test_falcon_better_than_dilithium(self):
+    def test_falcon_better_than_ml_dsa(self):
         f512 = analyze_solana_block_space("Falcon-512")
-        d2 = analyze_solana_block_space("Dilithium2")
+        d2 = analyze_solana_block_space("ML-DSA-44")
         assert f512.txs_per_block > d2.txs_per_block
+
+    def test_slh_dsa_worst_throughput(self):
+        """SLH-DSA-256f has 49KB signatures -- worst throughput."""
+        ed = analyze_solana_block_space("Ed25519")
+        slh = analyze_solana_block_space("SLH-DSA-256f")
+        assert slh.txs_per_block < ed.txs_per_block
+        assert slh.relative_to_baseline < 0.5  # much less than half
 
     def test_txs_per_block_calculation(self):
         result = analyze_solana_block_space("Ed25519")
@@ -44,7 +58,7 @@ class TestSolanaBlockSpace:
         assert result.txs_per_block == expected
 
     def test_signature_overhead_percentage(self):
-        result = analyze_solana_block_space("Dilithium5")
+        result = analyze_solana_block_space("ML-DSA-87")
         expected_pct = round(4595 / (SOLANA_BASE_TX_OVERHEAD + 4595) * 100, 2)
         assert result.signature_overhead_pct == expected_pct
 
@@ -60,11 +74,12 @@ class TestSolanaBlockSpace:
         expected_txs = 1_000_000 // (100 + 64)
         assert result.txs_per_block == expected_txs
 
-    def test_ml_dsa_matches_dilithium(self):
-        d3 = analyze_solana_block_space("Dilithium3")
-        ml65 = analyze_solana_block_space("ML-DSA-65")
-        assert d3.signature_bytes == ml65.signature_bytes
-        assert d3.txs_per_block == ml65.txs_per_block
+    def test_multi_signer(self):
+        """Multi-signer transactions should reduce throughput."""
+        single = analyze_solana_block_space("ML-DSA-65", num_signers=1)
+        double = analyze_solana_block_space("ML-DSA-65", num_signers=2)
+        assert double.txs_per_block < single.txs_per_block
+        assert double.signature_bytes == single.signature_bytes * 2
 
 
 class TestSolanaCompareAll:
@@ -82,6 +97,12 @@ class TestSolanaCompareAll:
         for a in comp.analyses:
             assert a.throughput_tps > 0
 
+    def test_includes_slh_dsa(self):
+        comp = compare_all_solana()
+        sig_types = [a.signature_type for a in comp.analyses]
+        assert "SLH-DSA-128s" in sig_types
+        assert "SLH-DSA-256f" in sig_types
+
 
 class TestBitcoinBlockSpace:
     def test_ecdsa_baseline(self):
@@ -90,20 +111,19 @@ class TestBitcoinBlockSpace:
         assert result.relative_to_baseline == 1.0
 
     def test_segwit_discount_applied(self):
-        """Verify SegWit discount: witness data at 1x, non-witness at 4x."""
         result = analyze_bitcoin_block_space("ECDSA")
         expected_weight = (BITCOIN_BASE_TX_OVERHEAD * BITCOIN_WITNESS_DISCOUNT) + 72 + 33
         expected_txs = BITCOIN_BLOCK_WEIGHT_LIMIT // expected_weight
         assert result.txs_per_block == expected_txs
 
-    def test_falcon_better_than_dilithium(self):
+    def test_falcon_better_than_ml_dsa(self):
         f512 = analyze_bitcoin_block_space("Falcon-512")
-        d2 = analyze_bitcoin_block_space("Dilithium2")
+        d2 = analyze_bitcoin_block_space("ML-DSA-44")
         assert f512.txs_per_block > d2.txs_per_block
 
     def test_pqc_reduces_throughput(self):
         ecdsa = analyze_bitcoin_block_space("ECDSA")
-        d3 = analyze_bitcoin_block_space("Dilithium3")
+        d3 = analyze_bitcoin_block_space("ML-DSA-65")
         assert d3.txs_per_block < ecdsa.txs_per_block
         assert d3.relative_to_baseline < 1.0
 
@@ -117,6 +137,11 @@ class TestBitcoinBlockSpace:
         result = analyze_bitcoin_block_space("ECDSA")
         expected_weight = (BITCOIN_BASE_TX_OVERHEAD * 4) + 72 + 33
         assert result.tx_size_bytes == round(expected_weight / 4)
+
+    def test_multi_signer(self):
+        single = analyze_bitcoin_block_space("ECDSA", num_signers=1)
+        double = analyze_bitcoin_block_space("ECDSA", num_signers=2)
+        assert double.txs_per_block < single.txs_per_block
 
 
 class TestBitcoinCompareAll:
@@ -135,6 +160,61 @@ class TestBitcoinCompareAll:
             assert a.throughput_tps > 0
 
 
+class TestEthereumBlockSpace:
+    def test_ecdsa_baseline(self):
+        result = analyze_ethereum_block_space("ECDSA")
+        assert result.signature_bytes == 72
+        assert result.relative_to_baseline == 1.0
+
+    def test_gas_calculation(self):
+        """Verify gas-based transaction count."""
+        result = analyze_ethereum_block_space("ECDSA")
+        calldata_bytes = 72 + 33 + ETHEREUM_BASE_TX_OVERHEAD
+        expected_gas = ETHEREUM_BASE_TX_GAS + (calldata_bytes * ETHEREUM_CALLDATA_GAS_PER_BYTE)
+        expected_txs = ETHEREUM_BLOCK_GAS_LIMIT // expected_gas
+        assert result.txs_per_block == expected_txs
+
+    def test_pqc_reduces_throughput(self):
+        ecdsa = analyze_ethereum_block_space("ECDSA")
+        d3 = analyze_ethereum_block_space("ML-DSA-65")
+        assert d3.txs_per_block < ecdsa.txs_per_block
+
+    def test_slh_dsa_dramatic_impact(self):
+        """SLH-DSA-256f (49KB) should dramatically reduce Ethereum throughput."""
+        ecdsa = analyze_ethereum_block_space("ECDSA")
+        slh = analyze_ethereum_block_space("SLH-DSA-256f")
+        assert slh.txs_per_block < ecdsa.txs_per_block / 5  # much less than 20%
+
+    @pytest.mark.parametrize("sig_type", ETHEREUM_SIG_TYPES)
+    def test_all_signature_types(self, sig_type: str):
+        result = analyze_ethereum_block_space(sig_type)
+        assert result.txs_per_block > 0
+        assert result.throughput_tps > 0
+
+    def test_12_second_block_time(self):
+        """Default Ethereum block time is 12 seconds."""
+        result = analyze_ethereum_block_space("ECDSA")
+        # TPS = txs_per_block / 12
+        expected_tps = result.txs_per_block / 12
+        assert abs(result.throughput_tps - expected_tps) < 0.01
+
+
+class TestEthereumCompareAll:
+    def test_returns_all_schemes(self):
+        comp = compare_all_ethereum()
+        assert len(comp.analyses) == len(ETHEREUM_SIG_TYPES)
+
+    def test_baseline_is_ecdsa(self):
+        comp = compare_all_ethereum()
+        assert comp.baseline.signature_type == "ECDSA"
+        assert comp.chain == "Ethereum"
+
+    def test_all_have_positive_tps(self):
+        comp = compare_all_ethereum()
+        for a in comp.analyses:
+            assert a.throughput_tps > 0
+
+
 class TestBackwardsCompatibility:
     def test_analyze_block_space_alias(self):
         result = analyze_block_space("Ed25519")
@@ -144,3 +224,15 @@ class TestBackwardsCompatibility:
     def test_compare_all_alias(self):
         comp = compare_all()
         assert comp.baseline.signature_type == "Ed25519"
+
+
+class TestNoKyberDilithiumInModel:
+    """Ensure draft names are not in the blockchain model."""
+
+    def test_no_kyber_in_signature_sizes(self):
+        for key in SIGNATURE_SIZES:
+            assert "Kyber" not in key
+
+    def test_no_dilithium_in_signature_sizes(self):
+        for key in SIGNATURE_SIZES:
+            assert "Dilithium" not in key

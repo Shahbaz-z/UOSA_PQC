@@ -1,8 +1,10 @@
-"""Kyber KEM wrapper with automatic mock fallback.
+"""ML-KEM (FIPS 203) wrapper with automatic mock fallback.
 
-Supports Kyber512, Kyber768, and Kyber1024 via liboqs-python.
+Supports ML-KEM-512, ML-KEM-768, and ML-KEM-1024 via liboqs-python.
 If liboqs is unavailable, transparently uses mock implementations
-with correct artifact sizes.
+with correct artifact sizes per FIPS 203.
+
+ML-KEM was formerly known as "Kyber" during the NIST PQC competition.
 """
 
 from __future__ import annotations

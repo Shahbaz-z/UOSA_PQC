@@ -1,19 +1,23 @@
 """Blockchain block-space model for PQC signature impact analysis.
 
 Models the effect of replacing classical signatures with post-quantum
-schemes on transaction throughput for Solana and Bitcoin.
+schemes on transaction throughput for Solana, Bitcoin, and Ethereum.
 
 Assumptions and limitations (document in report):
 - We model *signature contribution* to transaction size, not full
   transaction serialization.
 - Base transaction overhead is approximated as a constant.
 - Solana practical block size is ~6 MB (theoretical 32 MB).
+  Note: ~50% of real block space is consumed by validator vote
+  transactions; this model assumes all space is user-available.
 - Bitcoin block weight limit is 4 MWU; SegWit witness discount applies.
+- Ethereum uses gas-based cost model with 30M gas block limit.
 
 Sources:
 - Solana docs: https://docs.solana.com/developing/programming-model/transactions
 - Bitcoin BIP 141 (SegWit): witness data counted at 1/4 weight
-- NIST PQC standards for signature sizes
+- Ethereum EVM: calldata costs 16 gas/non-zero byte, 4 gas/zero byte
+- NIST PQC standards (FIPS 203/204/205) for signature sizes
 """
 
 from __future__ import annotations
@@ -22,22 +26,28 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 # ---------------------------------------------------------------------------
-# Signature & public-key sizes (bytes) – shared across chain models
+# Signature & public-key sizes (bytes) -- NIST standards only
 # ---------------------------------------------------------------------------
 SIGNATURE_SIZES: Dict[str, int] = {
+    # Classical baselines (not quantum-resistant)
     "Ed25519": 64,
-    "ECDSA": 72,  # DER-encoded secp256k1 (Bitcoin baseline)
-    "Dilithium2": 2_420,
-    "Dilithium3": 3_293,
-    "Dilithium5": 4_595,
+    "ECDSA": 72,  # DER-encoded secp256k1 (Bitcoin/Ethereum baseline)
+    # FIPS 204 -- ML-DSA
     "ML-DSA-44": 2_420,
     "ML-DSA-65": 3_293,
     "ML-DSA-87": 4_595,
+    # FIPS 205 -- SLH-DSA (SPHINCS+)
+    "SLH-DSA-128s": 7_856,
+    "SLH-DSA-128f": 17_088,
+    "SLH-DSA-192s": 16_224,
+    "SLH-DSA-256f": 49_856,
+    # Falcon (pending FIPS as FN-DSA)
     "Falcon-512": 666,
     "Falcon-1024": 1_280,
-    "Hybrid-Ed25519+Dilithium2": 64 + 2_420,
-    "Hybrid-Ed25519+Dilithium3": 64 + 3_293,
-    "Hybrid-Ed25519+Dilithium5": 64 + 4_595,
+    # Hybrid (Ed25519 + PQC)
+    "Hybrid-Ed25519+ML-DSA-44": 64 + 2_420,
+    "Hybrid-Ed25519+ML-DSA-65": 64 + 3_293,
+    "Hybrid-Ed25519+ML-DSA-87": 64 + 4_595,
     "Hybrid-Ed25519+Falcon-512": 64 + 666,
     "Hybrid-Ed25519+Falcon-1024": 64 + 1_280,
 }
@@ -45,24 +55,26 @@ SIGNATURE_SIZES: Dict[str, int] = {
 PUBLIC_KEY_SIZES: Dict[str, int] = {
     "Ed25519": 32,
     "ECDSA": 33,  # compressed secp256k1
-    "Dilithium2": 1_312,
-    "Dilithium3": 1_952,
-    "Dilithium5": 2_592,
     "ML-DSA-44": 1_312,
     "ML-DSA-65": 1_952,
     "ML-DSA-87": 2_592,
+    "SLH-DSA-128s": 32,
+    "SLH-DSA-128f": 32,
+    "SLH-DSA-192s": 48,
+    "SLH-DSA-256f": 64,
     "Falcon-512": 897,
     "Falcon-1024": 1_793,
-    "Hybrid-Ed25519+Dilithium2": 32 + 1_312,
-    "Hybrid-Ed25519+Dilithium3": 32 + 1_952,
-    "Hybrid-Ed25519+Dilithium5": 32 + 2_592,
+    "Hybrid-Ed25519+ML-DSA-44": 32 + 1_312,
+    "Hybrid-Ed25519+ML-DSA-65": 32 + 1_952,
+    "Hybrid-Ed25519+ML-DSA-87": 32 + 2_592,
     "Hybrid-Ed25519+Falcon-512": 32 + 897,
     "Hybrid-Ed25519+Falcon-1024": 32 + 1_793,
 }
 
-# Subsets for each chain (Solana uses Ed25519 baseline, Bitcoin uses ECDSA)
+# Subsets for each chain (Solana uses Ed25519 baseline, Bitcoin/Ethereum use ECDSA)
 SOLANA_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "ECDSA"]
 BITCOIN_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "Ed25519"]
+ETHEREUM_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "Ed25519"]
 
 # ---------------------------------------------------------------------------
 # Solana parameters
@@ -78,6 +90,37 @@ BITCOIN_BLOCK_WEIGHT_LIMIT = 4_000_000  # 4 MWU (BIP 141)
 BITCOIN_BLOCK_TIME_MS = 600_000  # 10 minutes
 BITCOIN_BASE_TX_OVERHEAD = 150  # version, locktime, input/output overhead
 BITCOIN_WITNESS_DISCOUNT = 4  # witness bytes count as 1/4 weight
+
+# ---------------------------------------------------------------------------
+# Ethereum parameters
+# ---------------------------------------------------------------------------
+ETHEREUM_BLOCK_GAS_LIMIT = 30_000_000  # 30M gas
+ETHEREUM_BLOCK_TIME_MS = 12_000  # 12 seconds (post-Merge)
+ETHEREUM_BASE_TX_GAS = 21_000  # intrinsic gas cost per transaction
+ETHEREUM_CALLDATA_GAS_PER_BYTE = 16  # non-zero calldata byte cost
+ETHEREUM_BASE_TX_OVERHEAD = 120  # non-signature calldata (to, value, nonce etc.)
+
+# ---------------------------------------------------------------------------
+# Multi-signature transaction types
+# ---------------------------------------------------------------------------
+SOLANA_TX_TYPES: Dict[str, dict] = {
+    "Simple Transfer": {"base_overhead": 200, "num_signers": 1},
+    "Token Transfer": {"base_overhead": 350, "num_signers": 1},
+    "Swap (DEX)": {"base_overhead": 800, "num_signers": 1},
+    "Multisig 2-of-3": {"base_overhead": 300, "num_signers": 2},
+}
+
+BITCOIN_TX_TYPES: Dict[str, dict] = {
+    "P2WPKH 1-in 2-out": {"base_overhead": 140, "num_signers": 1},
+    "P2WPKH 2-in 2-out": {"base_overhead": 180, "num_signers": 2},
+    "Multisig 2-of-3": {"base_overhead": 200, "num_signers": 2},
+}
+
+ETHEREUM_TX_TYPES: Dict[str, dict] = {
+    "ETH Transfer": {"base_overhead": 0, "num_signers": 1},
+    "ERC-20 Transfer": {"base_overhead": 68, "num_signers": 1},
+    "Swap (DEX)": {"base_overhead": 200, "num_signers": 1},
+}
 
 
 @dataclass
@@ -111,16 +154,17 @@ def analyze_solana_block_space(
     block_size: int = SOLANA_BLOCK_SIZE_BYTES,
     base_tx_overhead: int = SOLANA_BASE_TX_OVERHEAD,
     slot_time_ms: int = SOLANA_SLOT_TIME_MS,
+    num_signers: int = 1,
 ) -> BlockAnalysis:
     """Calculate how many transactions fit in a Solana block."""
-    sig_size = SIGNATURE_SIZES[signature_type]
-    pk_size = PUBLIC_KEY_SIZES[signature_type]
+    sig_size = SIGNATURE_SIZES[signature_type] * num_signers
+    pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
     tx_size = base_tx_overhead + sig_size
     txs_per_block = block_size // tx_size
     tps = txs_per_block / (slot_time_ms / 1000)
 
     # Baseline: Ed25519
-    ed_tx_size = base_tx_overhead + SIGNATURE_SIZES["Ed25519"]
+    ed_tx_size = base_tx_overhead + SIGNATURE_SIZES["Ed25519"] * num_signers
     ed_txs = block_size // ed_tx_size
 
     return BlockAnalysis(
@@ -140,10 +184,11 @@ def compare_all_solana(
     block_size: int = SOLANA_BLOCK_SIZE_BYTES,
     base_tx_overhead: int = SOLANA_BASE_TX_OVERHEAD,
     slot_time_ms: int = SOLANA_SLOT_TIME_MS,
+    num_signers: int = 1,
 ) -> ComparativeAnalysis:
     """Run Solana block-space analysis for every signature scheme."""
     analyses = [
-        analyze_solana_block_space(sig, block_size, base_tx_overhead, slot_time_ms)
+        analyze_solana_block_space(sig, block_size, base_tx_overhead, slot_time_ms, num_signers)
         for sig in SOLANA_SIG_TYPES
     ]
     baseline = next(a for a in analyses if a.signature_type == "Ed25519")
@@ -160,6 +205,7 @@ def analyze_bitcoin_block_space(
     base_tx_overhead: int = BITCOIN_BASE_TX_OVERHEAD,
     block_time_ms: int = BITCOIN_BLOCK_TIME_MS,
     witness_discount: int = BITCOIN_WITNESS_DISCOUNT,
+    num_signers: int = 1,
 ) -> BlockAnalysis:
     """Calculate how many transactions fit in a Bitcoin block.
 
@@ -168,8 +214,8 @@ def analyze_bitcoin_block_space(
     Total tx weight = (base_overhead * 4) + sig_bytes + pubkey_bytes.
     Block weight limit is 4,000,000 weight units (4 MWU).
     """
-    sig_size = SIGNATURE_SIZES[signature_type]
-    pk_size = PUBLIC_KEY_SIZES[signature_type]
+    sig_size = SIGNATURE_SIZES[signature_type] * num_signers
+    pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
 
     # Non-witness data at 4x weight, witness data at 1x weight
     tx_weight = (base_tx_overhead * witness_discount) + sig_size + pk_size
@@ -180,8 +226,8 @@ def analyze_bitcoin_block_space(
     tx_vsize = tx_weight / witness_discount
 
     # Baseline: ECDSA
-    ecdsa_sig = SIGNATURE_SIZES["ECDSA"]
-    ecdsa_pk = PUBLIC_KEY_SIZES["ECDSA"]
+    ecdsa_sig = SIGNATURE_SIZES["ECDSA"] * num_signers
+    ecdsa_pk = PUBLIC_KEY_SIZES["ECDSA"] * num_signers
     ecdsa_weight = (base_tx_overhead * witness_discount) + ecdsa_sig + ecdsa_pk
     ecdsa_txs = block_weight // ecdsa_weight
 
@@ -207,14 +253,87 @@ def compare_all_bitcoin(
     base_tx_overhead: int = BITCOIN_BASE_TX_OVERHEAD,
     block_time_ms: int = BITCOIN_BLOCK_TIME_MS,
     witness_discount: int = BITCOIN_WITNESS_DISCOUNT,
+    num_signers: int = 1,
 ) -> ComparativeAnalysis:
     """Run Bitcoin block-space analysis for every signature scheme."""
     analyses = [
-        analyze_bitcoin_block_space(sig, block_weight, base_tx_overhead, block_time_ms, witness_discount)
+        analyze_bitcoin_block_space(sig, block_weight, base_tx_overhead, block_time_ms, witness_discount, num_signers)
         for sig in BITCOIN_SIG_TYPES
     ]
     baseline = next(a for a in analyses if a.signature_type == "ECDSA")
     return ComparativeAnalysis(chain="Bitcoin", baseline=baseline, analyses=analyses)
+
+
+# ---------------------------------------------------------------------------
+# Ethereum model
+# ---------------------------------------------------------------------------
+
+def analyze_ethereum_block_space(
+    signature_type: str,
+    block_gas_limit: int = ETHEREUM_BLOCK_GAS_LIMIT,
+    base_tx_overhead: int = ETHEREUM_BASE_TX_OVERHEAD,
+    block_time_ms: int = ETHEREUM_BLOCK_TIME_MS,
+    base_tx_gas: int = ETHEREUM_BASE_TX_GAS,
+    calldata_gas_per_byte: int = ETHEREUM_CALLDATA_GAS_PER_BYTE,
+    num_signers: int = 1,
+) -> BlockAnalysis:
+    """Calculate how many transactions fit in an Ethereum block.
+
+    Ethereum charges gas for calldata (signature + pubkey data):
+    - 16 gas per non-zero byte (conservative: assume all non-zero)
+    - 21,000 base gas per transaction
+    - Additional gas for non-signature calldata (to, value, etc.)
+    """
+    sig_size = SIGNATURE_SIZES[signature_type] * num_signers
+    pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
+
+    # Gas cost per transaction
+    calldata_bytes = sig_size + pk_size + base_tx_overhead
+    tx_gas = base_tx_gas + (calldata_bytes * calldata_gas_per_byte)
+    txs_per_block = block_gas_limit // tx_gas
+    tps = txs_per_block / (block_time_ms / 1000)
+
+    # Equivalent "transaction size" for display (calldata bytes)
+    tx_size = base_tx_overhead + sig_size + pk_size
+
+    # Baseline: ECDSA
+    ecdsa_sig = SIGNATURE_SIZES["ECDSA"] * num_signers
+    ecdsa_pk = PUBLIC_KEY_SIZES["ECDSA"] * num_signers
+    ecdsa_calldata = ecdsa_sig + ecdsa_pk + base_tx_overhead
+    ecdsa_gas = base_tx_gas + (ecdsa_calldata * calldata_gas_per_byte)
+    ecdsa_txs = block_gas_limit // ecdsa_gas
+
+    # Signature overhead
+    sig_gas = (sig_size + pk_size) * calldata_gas_per_byte
+    sig_overhead = round((sig_gas / tx_gas) * 100, 2)
+
+    return BlockAnalysis(
+        signature_type=signature_type,
+        signature_bytes=sig_size,
+        public_key_bytes=pk_size,
+        tx_size_bytes=tx_size,
+        txs_per_block=txs_per_block,
+        block_utilization_pct=round((txs_per_block * tx_gas / block_gas_limit) * 100, 2),
+        signature_overhead_pct=sig_overhead,
+        throughput_tps=round(tps, 2),
+        relative_to_baseline=round(txs_per_block / ecdsa_txs, 4) if ecdsa_txs > 0 else 0,
+    )
+
+
+def compare_all_ethereum(
+    block_gas_limit: int = ETHEREUM_BLOCK_GAS_LIMIT,
+    base_tx_overhead: int = ETHEREUM_BASE_TX_OVERHEAD,
+    block_time_ms: int = ETHEREUM_BLOCK_TIME_MS,
+    num_signers: int = 1,
+) -> ComparativeAnalysis:
+    """Run Ethereum block-space analysis for every signature scheme."""
+    analyses = [
+        analyze_ethereum_block_space(sig, block_gas_limit, base_tx_overhead, block_time_ms,
+                                     num_signers=num_signers)
+        for sig in ETHEREUM_SIG_TYPES
+    ]
+    baseline = next(a for a in analyses if a.signature_type == "ECDSA")
+    return ComparativeAnalysis(chain="Ethereum", baseline=baseline, analyses=analyses)
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +352,9 @@ def compare_all(block_size=SOLANA_BLOCK_SIZE_BYTES,
 
 
 if __name__ == "__main__":
-    for chain_name, compare_fn in [("SOLANA", compare_all_solana), ("BITCOIN", compare_all_bitcoin)]:
+    for chain_name, compare_fn in [("SOLANA", compare_all_solana),
+                                    ("BITCOIN", compare_all_bitcoin),
+                                    ("ETHEREUM", compare_all_ethereum)]:
         comp = compare_fn()
         baseline_name = comp.baseline.signature_type
         print(f"\n{'=' * 90}")

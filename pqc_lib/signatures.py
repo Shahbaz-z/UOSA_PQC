@@ -1,8 +1,15 @@
 """PQC signature wrapper with automatic mock fallback.
 
-Supports Dilithium2/3/5, ML-DSA-44/65/87, Falcon-512/1024 via
-liboqs-python and Ed25519 via PyNaCl.  Hybrid mode concatenates
-Ed25519 + PQC signatures (sign-with-both, verify-both).
+Supports NIST-standardized algorithms:
+  - ML-DSA-44/65/87  (FIPS 204, lattice-based, formerly "Dilithium")
+  - SLH-DSA-128s/128f/192s/256f  (FIPS 205, hash-based, formerly "SPHINCS+")
+  - Falcon-512/1024  (pending FIPS as FN-DSA, lattice/NTRU-based)
+  - Ed25519 via PyNaCl (classical, not quantum-resistant)
+
+Hybrid mode concatenates Ed25519 + PQC signatures (sign-with-both,
+verify-both).  This is a proof-of-concept approach without domain
+separation; production hybrid designs should follow composite
+signature standards (e.g., NIST SP 800-227).
 """
 
 from __future__ import annotations
@@ -95,7 +102,8 @@ def _ed25519_verify(public_key: bytes, message: bytes, signature: bytes) -> bool
         return False
 
 
-def _dilithium_keygen(algorithm: str):
+def _pqc_keygen(algorithm: str):
+    """Generate keypair for any PQC algorithm in SIG_PARAMS."""
     if MOCK_MODE:
         from pqc_lib.mock import mock_sig_keygen
         return mock_sig_keygen(algorithm)
@@ -105,7 +113,8 @@ def _dilithium_keygen(algorithm: str):
     return pk, sk
 
 
-def _dilithium_sign(algorithm: str, secret_key: bytes, message: bytes) -> bytes:
+def _pqc_sign(algorithm: str, secret_key: bytes, message: bytes) -> bytes:
+    """Sign with any PQC algorithm in SIG_PARAMS."""
     if MOCK_MODE:
         from pqc_lib.mock import mock_sign
         return mock_sign(algorithm, secret_key, message)
@@ -113,7 +122,8 @@ def _dilithium_sign(algorithm: str, secret_key: bytes, message: bytes) -> bytes:
     return sig.sign(message)
 
 
-def _dilithium_verify(algorithm: str, public_key: bytes, message: bytes, signature: bytes) -> bool:
+def _pqc_verify(algorithm: str, public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Verify with any PQC algorithm in SIG_PARAMS."""
     if MOCK_MODE:
         from pqc_lib.mock import mock_verify
         return mock_verify(algorithm, public_key, message, signature)
@@ -142,7 +152,7 @@ def sign_keygen(algorithm: str) -> SigKeypair:
         pqc_algo = algorithm.replace("Hybrid-Ed25519+", "")
         tr_ed = timed_call(_ed25519_keygen)
         ed_pk, ed_sk = tr_ed.result
-        tr_pqc = timed_call(_dilithium_keygen, pqc_algo)
+        tr_pqc = timed_call(_pqc_keygen, pqc_algo)
         pqc_pk, pqc_sk = tr_pqc.result
         return SigKeypair(
             algorithm=algorithm,
@@ -157,7 +167,7 @@ def sign_keygen(algorithm: str) -> SigKeypair:
         )
 
     if algorithm in SIG_PARAMS:
-        tr = timed_call(_dilithium_keygen, algorithm)
+        tr = timed_call(_pqc_keygen, algorithm)
         pk, sk = tr.result
         return SigKeypair(
             algorithm=algorithm,
@@ -193,7 +203,7 @@ def sign(algorithm: str, secret_key: bytes, message: bytes, keypair: Optional[Si
             pqc_sk = secret_key[ed_sk_len:]
 
         tr_ed = timed_call(_ed25519_sign, ed_sk, message)
-        tr_pqc = timed_call(_dilithium_sign, pqc_algo, pqc_sk, message)
+        tr_pqc = timed_call(_pqc_sign, pqc_algo, pqc_sk, message)
         combined = tr_ed.result + tr_pqc.result
         return SignResult(
             algorithm=algorithm,
@@ -204,7 +214,7 @@ def sign(algorithm: str, secret_key: bytes, message: bytes, keypair: Optional[Si
         )
 
     if algorithm in SIG_PARAMS:
-        tr = timed_call(_dilithium_sign, algorithm, secret_key, message)
+        tr = timed_call(_pqc_sign, algorithm, secret_key, message)
         return SignResult(
             algorithm=algorithm,
             signature=tr.result,
@@ -249,7 +259,7 @@ def verify(
         pqc_sig = signature[ed_sig_len:]
 
         tr_ed = timed_call(_ed25519_verify, ed_pk, message, ed_sig)
-        tr_pqc = timed_call(_dilithium_verify, pqc_algo, pqc_pk, message, pqc_sig)
+        tr_pqc = timed_call(_pqc_verify, pqc_algo, pqc_pk, message, pqc_sig)
         return VerifyResult(
             algorithm=algorithm,
             valid=tr_ed.result and tr_pqc.result,
@@ -258,7 +268,7 @@ def verify(
         )
 
     if algorithm in SIG_PARAMS:
-        tr = timed_call(_dilithium_verify, algorithm, public_key, message, signature)
+        tr = timed_call(_pqc_verify, algorithm, public_key, message, signature)
         return VerifyResult(
             algorithm=algorithm,
             valid=tr.result,

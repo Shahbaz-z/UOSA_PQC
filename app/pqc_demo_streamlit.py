@@ -1,9 +1,9 @@
 """PQC Demo -- Streamlit Application.
 
 Four tabs:
-1. KEM Demo -- Kyber / ML-KEM key encapsulation interactive walkthrough
-2. Signature Demo -- Dilithium / ML-DSA / Falcon / Ed25519 / Hybrid signing
-3. Block-Space Visualizer -- Solana & Bitcoin throughput impact analysis
+1. KEM Demo -- ML-KEM (FIPS 203) key encapsulation interactive walkthrough
+2. Signature Demo -- ML-DSA / SLH-DSA / Falcon / Ed25519 / Hybrid signing
+3. Block-Space Visualizer -- Solana, Bitcoin & Ethereum throughput impact analysis
 4. Side-by-Side Comparison -- Compare multiple algorithms at once
 """
 
@@ -21,15 +21,20 @@ if _project_root not in sys.path:
 import streamlit as st
 import pandas as pd
 
-from pqc_lib.mock import MOCK_MODE, SIG_PARAMS, ED25519_PARAMS
+from pqc_lib.mock import (
+    MOCK_MODE, SIG_PARAMS, ED25519_PARAMS,
+    FIPS_204_ALGOS, FIPS_205_ALGOS, FALCON_ALGOS,
+)
 from pqc_lib.kem import keygen as kem_keygen, encaps, decaps, KEM_ALGORITHMS
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
 from benchmarks.bench import bench_kem, bench_sig
 from blockchain.solana_model import (
-    compare_all_solana, compare_all_bitcoin,
+    compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
     SIGNATURE_SIZES,
     SOLANA_BLOCK_SIZE_BYTES, SOLANA_BASE_TX_OVERHEAD,
     BITCOIN_BLOCK_WEIGHT_LIMIT, BITCOIN_BASE_TX_OVERHEAD,
+    ETHEREUM_BLOCK_GAS_LIMIT, ETHEREUM_BASE_TX_OVERHEAD, ETHEREUM_BLOCK_TIME_MS,
+    ETHEREUM_BASE_TX_GAS, ETHEREUM_CALLDATA_GAS_PER_BYTE,
 )
 from app.components.charts import (
     benchmark_bar_chart,
@@ -43,21 +48,19 @@ from app.components.charts import (
 # Algorithm metadata for tooltips and educational context
 # ---------------------------------------------------------------------------
 ALGO_INFO = {
-    "Kyber512": ("NIST Level 1 (AES-128 equivalent)", "KEM", "Lattice"),
-    "Kyber768": ("NIST Level 3 (AES-192 equivalent)", "KEM", "Lattice"),
-    "Kyber1024": ("NIST Level 5 (AES-256 equivalent)", "KEM", "Lattice"),
-    "ML-KEM-512": ("FIPS 203 -- standardized Kyber512", "KEM", "Lattice"),
-    "ML-KEM-768": ("FIPS 203 -- standardized Kyber768", "KEM", "Lattice"),
-    "ML-KEM-1024": ("FIPS 203 -- standardized Kyber1024", "KEM", "Lattice"),
+    "ML-KEM-512": ("FIPS 203 Level 1 (AES-128 equivalent)", "KEM", "Lattice (MLWE)"),
+    "ML-KEM-768": ("FIPS 203 Level 3 (AES-192 equivalent)", "KEM", "Lattice (MLWE)"),
+    "ML-KEM-1024": ("FIPS 203 Level 5 (AES-256 equivalent)", "KEM", "Lattice (MLWE)"),
     "Ed25519": ("Classical elliptic-curve signature (not PQC)", "Signature", "Elliptic Curve"),
-    "Dilithium2": ("NIST Level 2", "Signature", "Lattice"),
-    "Dilithium3": ("NIST Level 3 (recommended)", "Signature", "Lattice"),
-    "Dilithium5": ("NIST Level 5", "Signature", "Lattice"),
-    "ML-DSA-44": ("FIPS 204 -- standardized Dilithium2", "Signature", "Lattice"),
-    "ML-DSA-65": ("FIPS 204 -- standardized Dilithium3", "Signature", "Lattice"),
-    "ML-DSA-87": ("FIPS 204 -- standardized Dilithium5", "Signature", "Lattice"),
-    "Falcon-512": ("NIST Level 1 -- compact signatures", "Signature", "Lattice (NTRU)"),
-    "Falcon-1024": ("NIST Level 5 -- compact signatures", "Signature", "Lattice (NTRU)"),
+    "ML-DSA-44": ("FIPS 204 Level 2", "Signature", "Lattice (MLWE)"),
+    "ML-DSA-65": ("FIPS 204 Level 3 (recommended)", "Signature", "Lattice (MLWE)"),
+    "ML-DSA-87": ("FIPS 204 Level 5", "Signature", "Lattice (MLWE)"),
+    "SLH-DSA-128s": ("FIPS 205 Level 1 -- small/slow hash-based", "Signature", "Hash-based"),
+    "SLH-DSA-128f": ("FIPS 205 Level 1 -- fast/large hash-based", "Signature", "Hash-based"),
+    "SLH-DSA-192s": ("FIPS 205 Level 3 -- small/slow hash-based", "Signature", "Hash-based"),
+    "SLH-DSA-256f": ("FIPS 205 Level 5 -- fast/large hash-based", "Signature", "Hash-based"),
+    "Falcon-512": ("Level 1 -- pending FIPS as FN-DSA, compact sigs", "Signature", "Lattice (NTRU)"),
+    "Falcon-1024": ("Level 5 -- pending FIPS as FN-DSA, compact sigs", "Signature", "Lattice (NTRU)"),
 }
 
 
@@ -97,7 +100,9 @@ with st.sidebar:
     if MOCK_MODE:
         st.warning(
             "**Mock mode** -- liboqs not available. "
-            "Artifact sizes are accurate; timing is synthetic.",
+            "Artifact sizes are NIST-accurate; timing is synthetic. "
+            "Cryptographic security properties (verification, key agreement) "
+            "are **simulated only** and not real.",
             icon="⚠️",
         )
     else:
@@ -111,30 +116,32 @@ with st.sidebar:
             "Post-quantum cryptography (PQC) refers to algorithms designed to resist "
             "attacks from **quantum computers**. NIST standardized several PQC algorithms "
             "in 2024:\n\n"
-            "- **FIPS 203 (ML-KEM)**: Key Encapsulation based on Kyber\n"
-            "- **FIPS 204 (ML-DSA)**: Digital Signatures based on Dilithium\n"
-            "- **Falcon**: Alternate signature scheme with compact signatures"
+            "- **FIPS 203 (ML-KEM)**: Key Encapsulation (lattice-based)\n"
+            "- **FIPS 204 (ML-DSA)**: Digital Signatures (lattice-based)\n"
+            "- **FIPS 205 (SLH-DSA)**: Digital Signatures (hash-based)\n"
+            "- **Falcon**: Compact signatures (pending FIPS as FN-DSA)"
         )
 
     with st.expander("Algorithm Families"):
         st.markdown(
-            "| Family | Type | Basis |\n"
-            "|--------|------|-------|\n"
-            "| Kyber / ML-KEM | KEM | Module lattices |\n"
-            "| Dilithium / ML-DSA | Signature | Module lattices |\n"
-            "| Falcon | Signature | NTRU lattices |\n"
-            "| Ed25519 | Signature | Elliptic curves |\n"
-            "| ECDSA | Signature | Elliptic curves |"
+            "| Family | Type | Basis | Standard |\n"
+            "|--------|------|-------|----------|\n"
+            "| ML-KEM | KEM | Module lattices | FIPS 203 |\n"
+            "| ML-DSA | Signature | Module lattices | FIPS 204 |\n"
+            "| SLH-DSA | Signature | Hash-based | FIPS 205 |\n"
+            "| Falcon | Signature | NTRU lattices | Pending (FN-DSA) |\n"
+            "| Ed25519 | Signature | Elliptic curves | RFC 8032 |\n"
+            "| ECDSA | Signature | Elliptic curves | FIPS 186 |"
         )
 
     with st.expander("NIST Security Levels"):
         st.markdown(
             "| Level | Equivalent | Example |\n"
             "|-------|------------|----------|\n"
-            "| 1 | AES-128 | Kyber512, Falcon-512 |\n"
-            "| 2 | SHA-256 | Dilithium2 |\n"
-            "| 3 | AES-192 | Kyber768, Dilithium3 |\n"
-            "| 5 | AES-256 | Kyber1024, Dilithium5 |"
+            "| 1 | AES-128 | ML-KEM-512, SLH-DSA-128s, Falcon-512 |\n"
+            "| 2 | SHA-256 | ML-DSA-44 |\n"
+            "| 3 | AES-192 | ML-KEM-768, ML-DSA-65, SLH-DSA-192s |\n"
+            "| 5 | AES-256 | ML-KEM-1024, ML-DSA-87, SLH-DSA-256f |"
         )
 
     st.divider()
@@ -142,7 +149,7 @@ with st.sidebar:
     st.markdown(
         "1. **KEM Demo** -- Key exchange walkthrough\n"
         "2. **Signatures** -- Sign & verify walkthrough\n"
-        "3. **Block-Space** -- Blockchain impact analysis\n"
+        "3. **Block-Space** -- Solana, Bitcoin & Ethereum impact\n"
         "4. **Compare** -- Side-by-side algorithm comparison"
     )
 
@@ -167,7 +174,7 @@ tab_kem, tab_sig, tab_block, tab_compare = st.tabs([
 
 # ===== TAB 1: KEM Demo ====================================================
 with tab_kem:
-    st.header("Key Encapsulation Mechanism (Kyber / ML-KEM)")
+    st.header("Key Encapsulation Mechanism (ML-KEM, FIPS 203)")
 
     with st.expander("What is a KEM?", expanded=False):
         st.markdown(
@@ -179,8 +186,8 @@ with tab_kem:
             "secret and a ciphertext\n"
             "3. **Decapsulation** -- Alice uses her secret key and the ciphertext to "
             "recover the same shared secret\n\n"
-            "**Kyber** (standardized as **ML-KEM** in FIPS 203) is a lattice-based KEM "
-            "selected by NIST. Its security relies on the hardness of the Module "
+            "**ML-KEM** (FIPS 203) is a lattice-based KEM standardized by NIST. "
+            "Its security relies on the hardness of the Module "
             "Learning With Errors (MLWE) problem."
         )
 
@@ -190,7 +197,7 @@ with tab_kem:
             "Select KEM algorithm",
             KEM_ALGORITHMS,
             key="kem_algo",
-            help="Kyber = draft name, ML-KEM = FIPS 203 standard name. Same algorithm, different labels.",
+            help="ML-KEM is the FIPS 203 standard. Available in three security levels: 512, 768, 1024.",
         )
     with col_runs:
         n_kem_runs = st.slider("Benchmark runs", 1, 20, 5, key="kem_runs",
@@ -337,12 +344,17 @@ with tab_sig:
             "Digital signatures prove that a message was created by the holder of a "
             "secret key, without revealing the key itself. PQC signatures replace "
             "classical algorithms (Ed25519, ECDSA) that are vulnerable to quantum attack.\n\n"
-            "**Dilithium / ML-DSA** (FIPS 204): Lattice-based, larger signatures but "
+            "**ML-DSA** (FIPS 204): Lattice-based, larger signatures but "
             "very fast. Recommended by NIST for general use.\n\n"
+            "**SLH-DSA** (FIPS 205): Hash-based, providing algorithmic diversity from "
+            "lattice schemes. Very small public keys (32-64 B) but very large signatures "
+            "(7.8 KB - 49.9 KB). Offers 's' (small) and 'f' (fast) parameter sets.\n\n"
             "**Falcon**: Lattice-based (NTRU), produces **much smaller signatures** "
-            "(666 bytes vs 2,420 bytes at Level 1) but with more complex key generation.\n\n"
+            "(666 bytes vs 2,420 bytes at Level 1) but with more complex key generation. "
+            "Pending FIPS standardization as FN-DSA.\n\n"
             "**Hybrid mode**: Concatenates Ed25519 + PQC signatures for dual "
-            "classical/quantum security during the transition period."
+            "classical/quantum security during the transition period. "
+            "Note: this is a proof-of-concept concatenation without domain separation."
         )
 
     # Filter algorithms into categories for cleaner selection
@@ -405,6 +417,8 @@ with tab_sig:
             ratio = len(kp.public_key) / ed_pk
             if ratio > 1.5:
                 st.caption(f"Public key is **{ratio:.0f}x larger** than Ed25519 ({ed_pk} B)")
+            elif ratio < 1.0:
+                st.caption(f"Public key is **smaller** than Ed25519 ({ed_pk} B)")
             st.success("Keypair ready. Proceed to Step 2.", icon="✅")
         else:
             st.caption("Click the button above to generate a keypair.")
@@ -513,10 +527,21 @@ with tab_block:
 
     chain = st.radio(
         "Select blockchain",
-        ["Solana", "Bitcoin"],
+        ["Solana", "Bitcoin", "Ethereum"],
         horizontal=True,
         key="chain_select",
         help="Each blockchain has different block structure and size limits.",
+    )
+
+    # Multi-signer control (shared across all chains)
+    num_signers = st.slider(
+        "Number of signers per transaction",
+        min_value=1,
+        max_value=5,
+        value=1,
+        key="num_signers",
+        help="Multi-signature transactions multiply signature and public key sizes. "
+             "E.g. a 3-signer ML-DSA-65 tx has ~10 KB of signatures alone.",
     )
 
     if chain == "Solana":
@@ -528,7 +553,8 @@ with tab_block:
                 "the signature scheme changes. Larger PQC signatures mean fewer "
                 "transactions per block and lower throughput.\n\n"
                 "**Limitation:** Models signature contribution to transaction "
-                "size only. Real transactions include additional program data."
+                "size only. Real transactions include additional program data. "
+                "Also does not account for validator vote transactions (~50% of block space)."
             )
 
         # Presets
@@ -588,9 +614,9 @@ with tab_block:
                 help="Target time per slot (400 ms default)",
             )
 
-        comp = compare_all_solana(block_size, base_overhead, slot_time)
+        comp = compare_all_solana(block_size, base_overhead, slot_time, num_signers=num_signers)
 
-    else:  # Bitcoin
+    elif chain == "Bitcoin":
         with st.expander("About the Bitcoin model"):
             st.markdown(
                 "**Bitcoin** uses ECDSA (secp256k1) signatures with a 4 MWU block weight "
@@ -598,7 +624,7 @@ with tab_block:
                 "**SegWit discount (BIP 141):** Witness data (signatures + public keys) "
                 "counts at **1/4 weight**, while non-witness data counts at full weight. "
                 "This partially offsets the size increase of PQC signatures.\n\n"
-                "**Example:** A 3,293-byte Dilithium3 signature costs 3,293 weight units "
+                "**Example:** A 3,293-byte ML-DSA-65 signature costs 3,293 weight units "
                 "under SegWit, compared to 13,172 WU without the discount."
             )
 
@@ -659,11 +685,85 @@ with tab_block:
                 help="Average time between blocks (600,000 ms = 10 min default)",
             )
 
-        comp = compare_all_bitcoin(block_weight, btc_base_overhead, block_time)
+        comp = compare_all_bitcoin(block_weight, btc_base_overhead, block_time, num_signers=num_signers)
+
+    else:  # Ethereum
+        with st.expander("About the Ethereum model"):
+            st.markdown(
+                "**Ethereum** uses ECDSA (secp256k1) signatures with a gas-based cost model.\n\n"
+                "Unlike Solana and Bitcoin, Ethereum block capacity is measured in **gas** "
+                "rather than bytes. Each transaction pays:\n"
+                "- **21,000 gas** base intrinsic cost\n"
+                "- **16 gas per non-zero byte** of calldata (signature + public key)\n\n"
+                "The block gas limit is **30M gas** with **12-second** block times (post-Merge).\n\n"
+                "PQC signatures increase calldata size, consuming more gas per transaction "
+                "and reducing the number of transactions per block."
+            )
+
+        # Presets
+        st.markdown("##### Quick Presets")
+        pc1, pc2, pc3 = st.columns(3)
+        with pc1:
+            if st.button("Default Ethereum", key="eth_default", use_container_width=True,
+                         help="30M gas, 120 B overhead, 12s blocks"):
+                st.session_state["eth_gas_limit"] = ETHEREUM_BLOCK_GAS_LIMIT
+                st.session_state["eth_base_overhead"] = ETHEREUM_BASE_TX_OVERHEAD
+                st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
+                st.rerun()
+        with pc2:
+            if st.button("Higher Gas Limit", key="eth_high", use_container_width=True,
+                         help="60M gas, 120 B overhead, 12s blocks"):
+                st.session_state["eth_gas_limit"] = 60_000_000
+                st.session_state["eth_base_overhead"] = 120
+                st.session_state["eth_block_time"] = 12_000
+                st.rerun()
+        with pc3:
+            if st.button("Constrained Gas", key="eth_constrained", use_container_width=True,
+                         help="15M gas, 120 B overhead, 12s blocks"):
+                st.session_state["eth_gas_limit"] = 15_000_000
+                st.session_state["eth_base_overhead"] = 120
+                st.session_state["eth_block_time"] = 12_000
+                st.rerun()
+
+        col_params, col_results = st.columns([1, 2])
+
+        with col_params:
+            st.markdown("##### Model Parameters")
+            eth_gas_limit = st.number_input(
+                "Block gas limit",
+                value=st.session_state.get("eth_gas_limit", ETHEREUM_BLOCK_GAS_LIMIT),
+                min_value=1_000_000,
+                max_value=100_000_000,
+                step=5_000_000,
+                key="eth_gas_limit",
+                help="Ethereum block gas limit (30,000,000 default)",
+            )
+            eth_base_overhead = st.number_input(
+                "Base tx overhead (bytes)",
+                value=st.session_state.get("eth_base_overhead", ETHEREUM_BASE_TX_OVERHEAD),
+                min_value=50,
+                max_value=500,
+                step=10,
+                key="eth_base_overhead",
+                help="Non-signature calldata overhead (to, value, nonce, etc.)",
+            )
+            eth_block_time = st.number_input(
+                "Block time (ms)",
+                value=st.session_state.get("eth_block_time", ETHEREUM_BLOCK_TIME_MS),
+                min_value=1_000,
+                max_value=60_000,
+                step=1_000,
+                key="eth_block_time",
+                help="Slot time (12,000 ms = 12s default, post-Merge)",
+            )
+
+        comp = compare_all_ethereum(eth_gas_limit, eth_base_overhead, eth_block_time, num_signers=num_signers)
 
     # Results table
     with col_results:
         st.markdown("##### Results Summary")
+        if num_signers > 1:
+            st.caption(f"Modeling **{num_signers} signers** per transaction")
         summary_rows = []
         for a in comp.analyses:
             summary_rows.append({
@@ -720,8 +820,8 @@ with tab_block:
         key=lambda a: a.txs_per_block,
     )
     falcon_size = SIGNATURE_SIZES.get("Falcon-512", 666)
-    dilithium_size = SIGNATURE_SIZES.get("Dilithium2", 2420)
-    falcon_ratio = dilithium_size // falcon_size
+    mldsa_size = SIGNATURE_SIZES.get("ML-DSA-44", 2420)
+    falcon_ratio = mldsa_size // falcon_size
 
     kf1, kf2, kf3 = st.columns(3)
     with kf1:
@@ -750,7 +850,7 @@ with tab_block:
 
     st.info(
         f"Falcon-512 signatures (**{falcon_size} B**) are **{falcon_ratio}x smaller** "
-        f"than Dilithium2 (**{dilithium_size:,} B**), making Falcon the most block-space "
+        f"than ML-DSA-44 (**{mldsa_size:,} B**), making Falcon the most block-space "
         "efficient PQC signature scheme for blockchain applications.",
         icon="💡",
     )
@@ -773,7 +873,7 @@ with tab_compare:
         selected_algos = st.multiselect(
             "Select algorithms to compare (min 2)",
             SIG_ALGORITHMS,
-            default=["Ed25519", "Dilithium3", "Falcon-512"],
+            default=["Ed25519", "ML-DSA-65", "Falcon-512"],
             key="compare_algos",
             help="Pick algorithms to compare. Mix classical and PQC for the most insight.",
         )

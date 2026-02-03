@@ -1,16 +1,15 @@
-"""Tests for pqc_lib.signatures – Dilithium / ML-DSA / Falcon / Ed25519 / Hybrid."""
+"""Tests for pqc_lib.signatures -- ML-DSA / SLH-DSA / Falcon / Ed25519 / Hybrid."""
 
 import pytest
 
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
-from pqc_lib.mock import SIG_PARAMS, ED25519_PARAMS
+from pqc_lib.mock import SIG_PARAMS, ED25519_PARAMS, FIPS_204_ALGOS, FIPS_205_ALGOS, FALCON_ALGOS
 
 
-# Filter to non-hybrid algorithms for basic tests
+# Filter algorithm categories
 BASIC_ALGOS = [a for a in SIG_ALGORITHMS if not a.startswith("Hybrid")]
 HYBRID_ALGOS = [a for a in SIG_ALGORITHMS if a.startswith("Hybrid")]
-FALCON_ALGOS = [a for a in SIG_ALGORITHMS if "Falcon" in a and not a.startswith("Hybrid")]
-ML_DSA_ALGOS = [a for a in SIG_ALGORITHMS if a.startswith("ML-DSA")]
+SLH_DSA_ALGOS = [a for a in SIG_ALGORITHMS if a.startswith("SLH-DSA")]
 
 
 @pytest.mark.parametrize("algorithm", BASIC_ALGOS)
@@ -43,7 +42,6 @@ class TestHybridSignatures:
         kp = sign_keygen(algorithm)
         assert kp.ed25519_pk is not None
         assert kp.pqc_pk is not None
-        # Combined public key = ed25519 pk + pqc pk
         assert kp.public_key == kp.ed25519_pk + kp.pqc_pk
 
     def test_sign_verify_roundtrip(self, algorithm: str):
@@ -66,11 +64,16 @@ def test_invalid_algorithm():
         sign_keygen("NotAnAlgorithm")
 
 
+def test_dilithium_draft_names_removed():
+    """Dilithium draft names should not be in the algorithm list."""
+    for algo in SIG_ALGORITHMS:
+        assert not algo.startswith("Dilithium"), f"Draft name {algo} found; use ML-DSA instead"
+
+
 class TestFalcon:
-    """Falcon-specific tests."""
+    """Falcon-specific tests (pending FIPS standardization as FN-DSA)."""
 
     def test_falcon512_compact_signature(self):
-        """Falcon-512 signatures should be 666 bytes (much smaller than Dilithium)."""
         kp = sign_keygen("Falcon-512")
         sr = sign("Falcon-512", kp.secret_key, b"falcon test", kp)
         assert sr.signature_size == 666
@@ -80,58 +83,72 @@ class TestFalcon:
         sr = sign("Falcon-1024", kp.secret_key, b"falcon test", kp)
         assert sr.signature_size == 1280
 
-    def test_falcon512_smaller_than_dilithium2(self):
+    def test_falcon512_smaller_than_ml_dsa_44(self):
         kp_f = sign_keygen("Falcon-512")
-        kp_d = sign_keygen("Dilithium2")
+        kp_d = sign_keygen("ML-DSA-44")
         sr_f = sign("Falcon-512", kp_f.secret_key, b"compare", kp_f)
-        sr_d = sign("Dilithium2", kp_d.secret_key, b"compare", kp_d)
+        sr_d = sign("ML-DSA-44", kp_d.secret_key, b"compare", kp_d)
         assert sr_f.signature_size < sr_d.signature_size
 
 
-class TestMLDSA:
-    """ML-DSA (FIPS 204) tests – same sizes as Dilithium."""
+class TestSLHDSA:
+    """SLH-DSA (FIPS 205 / SPHINCS+) tests -- hash-based signatures."""
 
-    @pytest.mark.parametrize("ml,dil", [
-        ("ML-DSA-44", "Dilithium2"),
-        ("ML-DSA-65", "Dilithium3"),
-        ("ML-DSA-87", "Dilithium5"),
-    ])
-    def test_ml_dsa_matches_dilithium_sizes(self, ml: str, dil: str):
-        kp_ml = sign_keygen(ml)
-        kp_dil = sign_keygen(dil)
-        assert len(kp_ml.public_key) == len(kp_dil.public_key)
-        assert len(kp_ml.secret_key) == len(kp_dil.secret_key)
-        sr_ml = sign(ml, kp_ml.secret_key, b"compare", kp_ml)
-        sr_dil = sign(dil, kp_dil.secret_key, b"compare", kp_dil)
-        assert sr_ml.signature_size == sr_dil.signature_size
+    def test_all_slh_dsa_variants_present(self):
+        for algo in FIPS_205_ALGOS:
+            assert algo in SIG_ALGORITHMS, f"{algo} missing from SIG_ALGORITHMS"
+
+    @pytest.mark.parametrize("algorithm", FIPS_205_ALGOS)
+    def test_keygen_and_sign(self, algorithm: str):
+        kp = sign_keygen(algorithm)
+        sr = sign(algorithm, kp.secret_key, b"slh-dsa test", kp)
+        vr = verify(algorithm, kp.public_key, b"slh-dsa test", sr.signature, kp)
+        assert vr.valid is True
+
+    def test_slh_dsa_128s_signature_size(self):
+        kp = sign_keygen("SLH-DSA-128s")
+        sr = sign("SLH-DSA-128s", kp.secret_key, b"size check", kp)
+        assert sr.signature_size == 7856
+
+    def test_slh_dsa_128f_larger_than_128s(self):
+        """Fast variant has larger signatures than small variant."""
+        kp_s = sign_keygen("SLH-DSA-128s")
+        kp_f = sign_keygen("SLH-DSA-128f")
+        sr_s = sign("SLH-DSA-128s", kp_s.secret_key, b"compare", kp_s)
+        sr_f = sign("SLH-DSA-128f", kp_f.secret_key, b"compare", kp_f)
+        assert sr_f.signature_size > sr_s.signature_size
+
+    def test_slh_dsa_256f_largest_signature(self):
+        """SLH-DSA-256f should have the largest signature of all algorithms."""
+        kp = sign_keygen("SLH-DSA-256f")
+        sr = sign("SLH-DSA-256f", kp.secret_key, b"max size", kp)
+        assert sr.signature_size == 49856
+        # Should be larger than any ML-DSA or Falcon signature
+        assert sr.signature_size > SIG_PARAMS["ML-DSA-87"]["signature"]
+        assert sr.signature_size > SIG_PARAMS["Falcon-1024"]["signature"]
+
+    def test_slh_dsa_tiny_public_keys(self):
+        """SLH-DSA has notably small public keys (32-64 bytes)."""
+        kp = sign_keygen("SLH-DSA-128s")
+        assert len(kp.public_key) == 32  # Same size as Ed25519!
 
 
 class TestNegativeSignatures:
-    """Negative test cases – corrupted signatures, wrong messages."""
+    """Negative test cases -- corrupted signatures, wrong messages."""
 
     def test_corrupted_signature_fails(self):
-        """A flipped byte in the signature should fail verification."""
-        kp = sign_keygen("Dilithium3")
+        kp = sign_keygen("ML-DSA-65")
         msg = b"integrity check"
-        sr = sign("Dilithium3", kp.secret_key, msg, kp)
-        # Corrupt the signature by flipping a byte
+        sr = sign("ML-DSA-65", kp.secret_key, msg, kp)
         corrupted = bytearray(sr.signature)
         corrupted[0] ^= 0xFF
-        corrupted = bytes(corrupted)
-        vr = verify("Dilithium3", kp.public_key, msg, corrupted, kp)
-        # In mock mode, this will fail because the corrupted sig doesn't
-        # match the deterministic expected sig
+        vr = verify("ML-DSA-65", kp.public_key, msg, bytes(corrupted), kp)
         assert vr.valid is False
 
     def test_wrong_message_fails(self):
-        """Verifying against a different message should fail."""
-        kp = sign_keygen("Dilithium2")
-        sr = sign("Dilithium2", kp.secret_key, b"original message", kp)
-        vr = verify("Dilithium2", kp.public_key, b"different message", sr.signature, kp)
-        # Mock verify checks signature == mock_sign(algo, "", message),
-        # and mock_sign returns the same bytes regardless of message,
-        # so in mock mode this actually passes. This test is primarily
-        # for real mode. We still exercise the code path.
+        kp = sign_keygen("ML-DSA-44")
+        sr = sign("ML-DSA-44", kp.secret_key, b"original message", kp)
+        vr = verify("ML-DSA-44", kp.public_key, b"different message", sr.signature, kp)
         assert isinstance(vr.valid, bool)
 
     def test_ed25519_corrupted_signature(self):
@@ -143,12 +160,19 @@ class TestNegativeSignatures:
         assert vr.valid is False
 
     def test_hybrid_corrupted_pqc_part(self):
-        """Corrupting the PQC portion of a hybrid sig should fail."""
-        kp = sign_keygen("Hybrid-Ed25519+Dilithium3")
+        kp = sign_keygen("Hybrid-Ed25519+ML-DSA-65")
         msg = b"hybrid integrity"
-        sr = sign("Hybrid-Ed25519+Dilithium3", kp.secret_key, msg, kp)
+        sr = sign("Hybrid-Ed25519+ML-DSA-65", kp.secret_key, msg, kp)
         corrupted = bytearray(sr.signature)
-        # Corrupt a byte in the PQC portion (after the 64-byte Ed25519 sig)
         corrupted[65] ^= 0xFF
-        vr = verify("Hybrid-Ed25519+Dilithium3", kp.public_key, msg, bytes(corrupted), kp)
+        vr = verify("Hybrid-Ed25519+ML-DSA-65", kp.public_key, msg, bytes(corrupted), kp)
+        assert vr.valid is False
+
+    def test_slh_dsa_corrupted_signature(self):
+        kp = sign_keygen("SLH-DSA-128s")
+        msg = b"slh-dsa integrity"
+        sr = sign("SLH-DSA-128s", kp.secret_key, msg, kp)
+        corrupted = bytearray(sr.signature)
+        corrupted[0] ^= 0xFF
+        vr = verify("SLH-DSA-128s", kp.public_key, msg, bytes(corrupted), kp)
         assert vr.valid is False
