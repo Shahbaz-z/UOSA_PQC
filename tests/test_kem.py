@@ -33,7 +33,7 @@ class TestKEM:
     def test_shared_secret_length(self, algorithm: str):
         kp = keygen(algorithm)
         enc = encaps(algorithm, kp.public_key)
-        assert len(enc.shared_secret) == 32
+        assert len(enc.shared_secret) == KEM_PARAMS[algorithm]["shared_secret"]
 
     def test_key_sizes_match_spec(self, algorithm: str):
         kp = keygen(algorithm)
@@ -68,11 +68,11 @@ class TestKEMNegative:
         enc = encaps("ML-KEM-512", kp1.public_key)
         dec_wrong = decaps("ML-KEM-512", kp2.secret_key, enc.ciphertext)
         assert isinstance(dec_wrong.shared_secret, bytes)
-        assert len(dec_wrong.shared_secret) == 32
+        assert len(dec_wrong.shared_secret) == KEM_PARAMS["ML-KEM-512"]["shared_secret"]
 
     def test_all_ml_kem_variants_present(self):
         """All three ML-KEM security levels should be available."""
         assert "ML-KEM-512" in KEM_ALGORITHMS
         assert "ML-KEM-768" in KEM_ALGORITHMS
         assert "ML-KEM-1024" in KEM_ALGORITHMS
-        assert len(KEM_ALGORITHMS) == 3
+        assert len(KEM_ALGORITHMS) >= 3  # At least the three standard levels

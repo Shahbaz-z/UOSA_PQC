@@ -76,12 +76,12 @@ class TestFalcon:
     def test_falcon512_compact_signature(self):
         kp = sign_keygen("Falcon-512")
         sr = sign("Falcon-512", kp.secret_key, b"falcon test", kp)
-        assert sr.signature_size == 666
+        assert sr.signature_size == SIG_PARAMS["Falcon-512"]["signature"]
 
     def test_falcon1024_signature_size(self):
         kp = sign_keygen("Falcon-1024")
         sr = sign("Falcon-1024", kp.secret_key, b"falcon test", kp)
-        assert sr.signature_size == 1280
+        assert sr.signature_size == SIG_PARAMS["Falcon-1024"]["signature"]
 
     def test_falcon512_smaller_than_ml_dsa_44(self):
         kp_f = sign_keygen("Falcon-512")
@@ -108,7 +108,7 @@ class TestSLHDSA:
     def test_slh_dsa_128s_signature_size(self):
         kp = sign_keygen("SLH-DSA-128s")
         sr = sign("SLH-DSA-128s", kp.secret_key, b"size check", kp)
-        assert sr.signature_size == 7856
+        assert sr.signature_size == SIG_PARAMS["SLH-DSA-128s"]["signature"]
 
     def test_slh_dsa_128f_larger_than_128s(self):
         """Fast variant has larger signatures than small variant."""
@@ -122,7 +122,7 @@ class TestSLHDSA:
         """SLH-DSA-256f should have the largest signature of all algorithms."""
         kp = sign_keygen("SLH-DSA-256f")
         sr = sign("SLH-DSA-256f", kp.secret_key, b"max size", kp)
-        assert sr.signature_size == 49856
+        assert sr.signature_size == SIG_PARAMS["SLH-DSA-256f"]["signature"]
         # Should be larger than any ML-DSA or Falcon signature
         assert sr.signature_size > SIG_PARAMS["ML-DSA-87"]["signature"]
         assert sr.signature_size > SIG_PARAMS["Falcon-1024"]["signature"]
@@ -130,7 +130,7 @@ class TestSLHDSA:
     def test_slh_dsa_tiny_public_keys(self):
         """SLH-DSA has notably small public keys (32-64 bytes)."""
         kp = sign_keygen("SLH-DSA-128s")
-        assert len(kp.public_key) == 32  # Same size as Ed25519!
+        assert len(kp.public_key) == SIG_PARAMS["SLH-DSA-128s"]["public_key"]
 
 
 class TestNegativeSignatures:

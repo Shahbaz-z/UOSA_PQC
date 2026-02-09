@@ -30,8 +30,8 @@ from blockchain.solana_model import (
 class TestSolanaBlockSpace:
     def test_ed25519_baseline(self):
         result = analyze_solana_block_space("Ed25519")
-        assert result.signature_bytes == 64
-        assert result.tx_size_bytes == SOLANA_BASE_TX_OVERHEAD + 64
+        assert result.signature_bytes == SIGNATURE_SIZES["Ed25519"]
+        assert result.tx_size_bytes == SOLANA_BASE_TX_OVERHEAD + SIGNATURE_SIZES["Ed25519"]
         assert result.relative_to_baseline == 1.0
 
     def test_ml_dsa_65_smaller_throughput(self):
@@ -54,12 +54,13 @@ class TestSolanaBlockSpace:
 
     def test_txs_per_block_calculation(self):
         result = analyze_solana_block_space("Ed25519")
-        expected = SOLANA_BLOCK_SIZE_BYTES // (SOLANA_BASE_TX_OVERHEAD + 64)
+        expected = SOLANA_BLOCK_SIZE_BYTES // (SOLANA_BASE_TX_OVERHEAD + SIGNATURE_SIZES["Ed25519"])
         assert result.txs_per_block == expected
 
     def test_signature_overhead_percentage(self):
         result = analyze_solana_block_space("ML-DSA-87")
-        expected_pct = round(4595 / (SOLANA_BASE_TX_OVERHEAD + 4595) * 100, 2)
+        sig_size = SIGNATURE_SIZES["ML-DSA-87"]
+        expected_pct = round(sig_size / (SOLANA_BASE_TX_OVERHEAD + sig_size) * 100, 2)
         assert result.signature_overhead_pct == expected_pct
 
     @pytest.mark.parametrize("sig_type", SOLANA_SIG_TYPES)
@@ -71,7 +72,7 @@ class TestSolanaBlockSpace:
 
     def test_custom_parameters(self):
         result = analyze_solana_block_space("Ed25519", block_size=1_000_000, base_tx_overhead=100)
-        expected_txs = 1_000_000 // (100 + 64)
+        expected_txs = 1_000_000 // (100 + SIGNATURE_SIZES["Ed25519"])
         assert result.txs_per_block == expected_txs
 
     def test_multi_signer(self):
@@ -107,12 +108,13 @@ class TestSolanaCompareAll:
 class TestBitcoinBlockSpace:
     def test_ecdsa_baseline(self):
         result = analyze_bitcoin_block_space("ECDSA")
-        assert result.signature_bytes == 72
+        assert result.signature_bytes == SIGNATURE_SIZES["ECDSA"]
         assert result.relative_to_baseline == 1.0
 
     def test_segwit_discount_applied(self):
         result = analyze_bitcoin_block_space("ECDSA")
-        expected_weight = (BITCOIN_BASE_TX_OVERHEAD * BITCOIN_WITNESS_DISCOUNT) + 72 + 33
+        # 33 is ECDSA compressed public key size
+        expected_weight = (BITCOIN_BASE_TX_OVERHEAD * BITCOIN_WITNESS_DISCOUNT) + SIGNATURE_SIZES["ECDSA"] + 33
         expected_txs = BITCOIN_BLOCK_WEIGHT_LIMIT // expected_weight
         assert result.txs_per_block == expected_txs
 
@@ -135,7 +137,8 @@ class TestBitcoinBlockSpace:
 
     def test_vsize_is_weight_div_4(self):
         result = analyze_bitcoin_block_space("ECDSA")
-        expected_weight = (BITCOIN_BASE_TX_OVERHEAD * 4) + 72 + 33
+        # 33 is ECDSA compressed public key size
+        expected_weight = (BITCOIN_BASE_TX_OVERHEAD * 4) + SIGNATURE_SIZES["ECDSA"] + 33
         assert result.tx_size_bytes == round(expected_weight / 4)
 
     def test_multi_signer(self):
@@ -163,13 +166,14 @@ class TestBitcoinCompareAll:
 class TestEthereumBlockSpace:
     def test_ecdsa_baseline(self):
         result = analyze_ethereum_block_space("ECDSA")
-        assert result.signature_bytes == 72
+        assert result.signature_bytes == SIGNATURE_SIZES["ECDSA"]
         assert result.relative_to_baseline == 1.0
 
     def test_gas_calculation(self):
         """Verify gas-based transaction count."""
         result = analyze_ethereum_block_space("ECDSA")
-        calldata_bytes = 72 + 33 + ETHEREUM_BASE_TX_OVERHEAD
+        # 33 is ECDSA compressed public key size
+        calldata_bytes = SIGNATURE_SIZES["ECDSA"] + 33 + ETHEREUM_BASE_TX_OVERHEAD
         expected_gas = ETHEREUM_BASE_TX_GAS + (calldata_bytes * ETHEREUM_CALLDATA_GAS_PER_BYTE)
         expected_txs = ETHEREUM_BLOCK_GAS_LIMIT // expected_gas
         assert result.txs_per_block == expected_txs
@@ -218,7 +222,7 @@ class TestEthereumCompareAll:
 class TestBackwardsCompatibility:
     def test_analyze_block_space_alias(self):
         result = analyze_block_space("Ed25519")
-        assert result.signature_bytes == 64
+        assert result.signature_bytes == SIGNATURE_SIZES["Ed25519"]
         assert result.relative_to_baseline == 1.0
 
     def test_compare_all_alias(self):

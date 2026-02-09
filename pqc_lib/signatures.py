@@ -85,7 +85,7 @@ def _ed25519_sign(secret_key: bytes, message: bytes) -> bytes:
     if MOCK_MODE or not _HAS_NACL:
         from pqc_lib.mock import mock_ed25519_sign
         return mock_ed25519_sign(secret_key, message)
-    sk_obj = SigningKey(secret_key[:32])
+    sk_obj = SigningKey(secret_key[:ED25519_PARAMS["public_key"]])
     signed = sk_obj.sign(message)
     return signed.signature
 

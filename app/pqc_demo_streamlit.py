@@ -21,18 +21,15 @@ if _project_root not in sys.path:
 import streamlit as st
 import pandas as pd
 
-from pqc_lib.mock import (
-    MOCK_MODE, SIG_PARAMS, ED25519_PARAMS,
-    FIPS_204_ALGOS, FIPS_205_ALGOS, FALCON_ALGOS,
-)
+from pqc_lib.mock import MOCK_MODE, SIG_PARAMS, ED25519_PARAMS
 from pqc_lib.kem import keygen as kem_keygen, encaps, decaps, KEM_ALGORITHMS
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
 from benchmarks.bench import bench_kem, bench_sig
 from blockchain.solana_model import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
     SIGNATURE_SIZES,
-    SOLANA_BLOCK_SIZE_BYTES, SOLANA_BASE_TX_OVERHEAD,
-    BITCOIN_BLOCK_WEIGHT_LIMIT, BITCOIN_BASE_TX_OVERHEAD,
+    SOLANA_BLOCK_SIZE_BYTES, SOLANA_BASE_TX_OVERHEAD, SOLANA_SLOT_TIME_MS,
+    BITCOIN_BLOCK_WEIGHT_LIMIT, BITCOIN_BASE_TX_OVERHEAD, BITCOIN_BLOCK_TIME_MS,
     ETHEREUM_BLOCK_GAS_LIMIT, ETHEREUM_BASE_TX_OVERHEAD, ETHEREUM_BLOCK_TIME_MS,
     ETHEREUM_BASE_TX_GAS, ETHEREUM_CALLDATA_GAS_PER_BYTE,
 )
@@ -77,7 +74,7 @@ def _algo_help(algo: str) -> str:
 
 def _format_bytes(n: int) -> str:
     """Human-readable byte size."""
-    if n >= 1_000:
+    if n >= 1024:
         return f"{n:,} B ({n / 1024:.1f} KB)"
     return f"{n:,} B"
 
@@ -234,7 +231,7 @@ with tab_kem:
             c2.metric("Secret Key", _format_bytes(len(kp.secret_key)))
             st.metric("Keygen Time", f"{kp.keygen_time_ms:.3f} ms")
             with st.expander("View public key (hex)", expanded=False):
-                st.code(kp.public_key[:64].hex(), language="text")
+                st.code(kp.public_key[:64].hex() + "... (truncated)", language="text")
             st.success("Keypair ready. Proceed to Step 2.", icon="✅")
         else:
             st.caption("Click the button above to generate a keypair.")
@@ -565,14 +562,14 @@ with tab_block:
                          help="6 MB block, 250 B overhead, 400 ms slot"):
                 st.session_state["sol_block_size"] = SOLANA_BLOCK_SIZE_BYTES
                 st.session_state["sol_base_overhead"] = SOLANA_BASE_TX_OVERHEAD
-                st.session_state["sol_slot_time"] = 400
+                st.session_state["sol_slot_time"] = SOLANA_SLOT_TIME_MS
                 st.rerun()
         with pc2:
             if st.button("High Throughput", key="sol_high", use_container_width=True,
                          help="12 MB block, 200 B overhead, 400 ms slot"):
                 st.session_state["sol_block_size"] = 12_000_000
                 st.session_state["sol_base_overhead"] = 200
-                st.session_state["sol_slot_time"] = 400
+                st.session_state["sol_slot_time"] = SOLANA_SLOT_TIME_MS
                 st.rerun()
         with pc3:
             if st.button("Constrained", key="sol_constrained", use_container_width=True,
@@ -606,7 +603,7 @@ with tab_block:
             )
             slot_time = st.number_input(
                 "Slot time (ms)",
-                value=st.session_state.get("sol_slot_time", 400),
+                value=st.session_state.get("sol_slot_time", SOLANA_SLOT_TIME_MS),
                 min_value=100,
                 max_value=2000,
                 step=50,
@@ -636,14 +633,14 @@ with tab_block:
                          help="4 MWU, 150 B overhead, 10 min blocks"):
                 st.session_state["btc_block_weight"] = BITCOIN_BLOCK_WEIGHT_LIMIT
                 st.session_state["btc_base_overhead"] = BITCOIN_BASE_TX_OVERHEAD
-                st.session_state["btc_block_time"] = 600_000
+                st.session_state["btc_block_time"] = BITCOIN_BLOCK_TIME_MS
                 st.rerun()
         with pc2:
             if st.button("Larger Blocks", key="btc_large", use_container_width=True,
                          help="8 MWU, 150 B overhead, 10 min blocks"):
                 st.session_state["btc_block_weight"] = 8_000_000
                 st.session_state["btc_base_overhead"] = 150
-                st.session_state["btc_block_time"] = 600_000
+                st.session_state["btc_block_time"] = BITCOIN_BLOCK_TIME_MS
                 st.rerun()
         with pc3:
             if st.button("Faster Blocks", key="btc_fast", use_container_width=True,
@@ -677,7 +674,7 @@ with tab_block:
             )
             block_time = st.number_input(
                 "Block time (ms)",
-                value=st.session_state.get("btc_block_time", 600_000),
+                value=st.session_state.get("btc_block_time", BITCOIN_BLOCK_TIME_MS),
                 min_value=10_000,
                 max_value=3_600_000,
                 step=60_000,
@@ -715,14 +712,14 @@ with tab_block:
                          help="60M gas, 120 B overhead, 12s blocks"):
                 st.session_state["eth_gas_limit"] = 60_000_000
                 st.session_state["eth_base_overhead"] = 120
-                st.session_state["eth_block_time"] = 12_000
+                st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
                 st.rerun()
         with pc3:
             if st.button("Constrained Gas", key="eth_constrained", use_container_width=True,
                          help="15M gas, 120 B overhead, 12s blocks"):
                 st.session_state["eth_gas_limit"] = 15_000_000
                 st.session_state["eth_base_overhead"] = 120
-                st.session_state["eth_block_time"] = 12_000
+                st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
                 st.rerun()
 
         col_params, col_results = st.columns([1, 2])
@@ -819,9 +816,9 @@ with tab_block:
         [a for a in comp.analyses if a.signature_type != baseline.signature_type],
         key=lambda a: a.txs_per_block,
     )
-    falcon_size = SIGNATURE_SIZES.get("Falcon-512", 666)
-    mldsa_size = SIGNATURE_SIZES.get("ML-DSA-44", 2420)
-    falcon_ratio = mldsa_size // falcon_size
+    falcon_size = SIGNATURE_SIZES["Falcon-512"]
+    mldsa_size = SIGNATURE_SIZES["ML-DSA-44"]
+    falcon_ratio = round(mldsa_size / falcon_size, 1)
 
     kf1, kf2, kf3 = st.columns(3)
     with kf1:
@@ -929,7 +926,7 @@ with tab_compare:
                 "Public Key (B)": f"{len(r['kp'].public_key):,}",
                 "Secret Key (B)": f"{len(r['kp'].secret_key):,}",
                 "Signature (B)": f"{r['sr'].signature_size:,}",
-                "vs Ed25519": f"{r['sr'].signature_size / 64:.1f}x",
+                "vs Ed25519": f"{r['sr'].signature_size / ED25519_PARAMS['signature']:.1f}x",
                 "Keygen (ms)": f"{r['kp'].keygen_time_ms:.3f}",
                 "Sign (ms)": f"{r['sr'].time_ms:.3f}",
                 "Verify (ms)": f"{r['vr'].time_ms:.3f}",

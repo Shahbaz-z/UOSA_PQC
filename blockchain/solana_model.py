@@ -157,6 +157,11 @@ def analyze_solana_block_space(
     num_signers: int = 1,
 ) -> BlockAnalysis:
     """Calculate how many transactions fit in a Solana block."""
+    if signature_type not in SIGNATURE_SIZES:
+        raise ValueError(
+            f"Unknown signature type: {signature_type}. "
+            f"Valid types: {list(SIGNATURE_SIZES.keys())}"
+        )
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
     tx_size = base_tx_overhead + sig_size
@@ -214,6 +219,11 @@ def analyze_bitcoin_block_space(
     Total tx weight = (base_overhead * 4) + sig_bytes + pubkey_bytes.
     Block weight limit is 4,000,000 weight units (4 MWU).
     """
+    if signature_type not in SIGNATURE_SIZES:
+        raise ValueError(
+            f"Unknown signature type: {signature_type}. "
+            f"Valid types: {list(SIGNATURE_SIZES.keys())}"
+        )
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
 
@@ -284,6 +294,11 @@ def analyze_ethereum_block_space(
     - 21,000 base gas per transaction
     - Additional gas for non-signature calldata (to, value, etc.)
     """
+    if signature_type not in SIGNATURE_SIZES:
+        raise ValueError(
+            f"Unknown signature type: {signature_type}. "
+            f"Valid types: {list(SIGNATURE_SIZES.keys())}"
+        )
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
 
