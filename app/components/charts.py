@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from blockchain.solana_model import BlockAnalysis
+from blockchain.zk_models import ZKProofAnalysis
 
 # Consistent color scheme for PQC families
 FAMILY_COLORS = {
@@ -27,6 +28,15 @@ FAMILY_COLORS = {
     "SLH-DSA-192f": "#c49c94", # light brown
     "SLH-DSA-256s": "#e377c2", # pink
     "SLH-DSA-256f": "#f7b6d2", # light pink
+}
+
+# ZK proof system colors
+ZK_COLORS = {
+    "Groth16": "#e377c2",    # pink (SNARK)
+    "PLONK": "#f7b6d2",      # light pink (SNARK)
+    "Halo2": "#c5b0d5",      # light purple (SNARK)
+    "STARK-S": "#2ca02c",    # green (quantum-resistant)
+    "STARK-L": "#98df8a",    # light green (quantum-resistant)
 }
 
 
@@ -198,4 +208,142 @@ def side_by_side_dual_axis_chart(results: dict) -> go.Figure:
     fig.update_yaxes(title_text="Signature Size (bytes)", secondary_y=False)
     fig.update_yaxes(title_text="Sign Time (ms)", secondary_y=True)
 
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# ZK proof charts
+# ---------------------------------------------------------------------------
+
+def zk_proof_size_vs_gas_chart(analyses: List[ZKProofAnalysis]) -> go.Figure:
+    """Scatter plot of proof size vs verification gas cost, colored by quantum resistance."""
+    fig = go.Figure()
+
+    for a in analyses:
+        color = "#2ca02c" if a.quantum_resistant else "#d62728"
+        symbol = "diamond" if a.quantum_resistant else "circle"
+        fig.add_trace(go.Scatter(
+            x=[a.proof_bytes],
+            y=[a.verification_gas],
+            mode="markers+text",
+            marker=dict(size=16, color=color, symbol=symbol, line=dict(width=1, color="white")),
+            text=[a.proof_system],
+            textposition="top center",
+            name=a.proof_system,
+            hovertemplate=(
+                f"<b>{a.proof_system}</b><br>"
+                f"Proof size: {a.proof_bytes:,} bytes<br>"
+                f"Verification gas: {a.verification_gas:,}<br>"
+                f"Quantum resistant: {'Yes' if a.quantum_resistant else 'No'}<br>"
+                f"<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title="ZK Proof Size vs Verification Gas Cost",
+        xaxis_title="Proof Size (bytes, log scale)",
+        yaxis_title="Verification Gas",
+        xaxis_type="log",
+        yaxis_type="log",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12),
+        title_font_size=16,
+        showlegend=False,
+    )
+
+    # Add annotations for quantum resistance
+    fig.add_annotation(
+        text="Green = Quantum Resistant | Red = NOT Quantum Resistant",
+        xref="paper", yref="paper", x=0.5, y=-0.15,
+        showarrow=False, font=dict(size=11),
+    )
+    return fig
+
+
+def zk_throughput_comparison_chart(analyses: List[ZKProofAnalysis]) -> go.Figure:
+    """Bar chart comparing ZK proof system throughput on Ethereum."""
+    names = [a.proof_system for a in analyses]
+    tps_values = [a.throughput_tps for a in analyses]
+    colors = ["#2ca02c" if a.quantum_resistant else "#d62728" for a in analyses]
+
+    fig = go.Figure(go.Bar(
+        x=names,
+        y=tps_values,
+        marker_color=colors,
+        text=[f"{t:,.1f}" for t in tps_values],
+        textposition="outside",
+    ))
+
+    fig.update_layout(
+        title="Ethereum Throughput by ZK Proof System",
+        xaxis_title="Proof System",
+        yaxis_title="Transactions per Second",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12),
+        title_font_size=16,
+    )
+    return fig
+
+
+def zk_vs_signatures_chart(table_rows: List[dict]) -> go.Figure:
+    """Grouped bar chart comparing ZK proofs vs signature schemes on Ethereum."""
+    df = pd.DataFrame(table_rows)
+
+    color_map = {
+        "ZK-STARK": "#2ca02c",
+        "ZK-SNARK": "#d62728",
+        "Signature": "#1f77b4",
+    }
+
+    fig = px.bar(
+        df,
+        x="Scheme",
+        y="TPS",
+        color="Type",
+        title="Ethereum Throughput: ZK Proofs vs Signature Schemes",
+        color_discrete_map=color_map,
+        text="TPS",
+    )
+    fig.update_traces(texttemplate="%{text:,.1f}", textposition="outside")
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis_tickangle=-45,
+        font=dict(size=12),
+        title_font_size=16,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def zk_gas_breakdown_chart(analyses: List[ZKProofAnalysis]) -> go.Figure:
+    """Stacked bar showing gas breakdown: base + calldata + verification."""
+    data = []
+    for a in analyses:
+        base_gas = 21_000  # ETH_BASE_TX_GAS
+        calldata_gas = a.proof_bytes * 16  # ETH_CALLDATA_GAS_PER_BYTE
+        verification_gas = a.verification_gas
+        data.append({"System": a.proof_system, "Component": "Base (21k)", "Gas": base_gas})
+        data.append({"System": a.proof_system, "Component": "Calldata", "Gas": calldata_gas})
+        data.append({"System": a.proof_system, "Component": "Verification", "Gas": verification_gas})
+
+    df = pd.DataFrame(data)
+    fig = px.bar(
+        df,
+        x="System",
+        y="Gas",
+        color="Component",
+        title="Gas Breakdown per ZK Proof Transaction",
+        barmode="stack",
+        color_discrete_map={
+            "Base (21k)": "#636efa",
+            "Calldata": "#ff7f0e",
+            "Verification": "#ef553b",
+        },
+    )
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12),
+        title_font_size=16,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
     return fig
