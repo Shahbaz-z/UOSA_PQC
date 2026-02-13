@@ -3,7 +3,7 @@
 Three tabs:
 1. Block-Space Visualizer -- Solana, Bitcoin & Ethereum throughput impact analysis
 2. Side-by-Side Comparison -- Compare multiple signature algorithms at once
-3. (Future) ZK-STARKs Analysis -- Zero-knowledge proof impact modeling
+3. Cross-Chain Summary -- Compare PQC impact across all three blockchains
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pqc_lib.mock import MOCK_MODE, ED25519_PARAMS
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
 from blockchain.solana_model import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
-    SIGNATURE_SIZES,
+    SIGNATURE_SIZES, PUBLIC_KEY_SIZES,
     SOLANA_BLOCK_SIZE_BYTES, SOLANA_BASE_TX_OVERHEAD, SOLANA_SLOT_TIME_MS,
     SOLANA_VOTE_TX_PCT_DEFAULT, SOLANA_VOTE_TX_PCT_REALISTIC,
     BITCOIN_BLOCK_WEIGHT_LIMIT, BITCOIN_BASE_TX_OVERHEAD, BITCOIN_BLOCK_TIME_MS,
@@ -61,6 +61,88 @@ ALGO_INFO = {
     "Falcon-1024": ("Level 5 -- pending FIPS as FN-DSA, compact sigs", "Signature", "Lattice (NTRU)"),
 }
 
+# ---------------------------------------------------------------------------
+# Per-chain quantum vulnerability context
+# ---------------------------------------------------------------------------
+CHAIN_QUANTUM_CONTEXT = {
+    "Solana": {
+        "current_sig": "Ed25519",
+        "quantum_threat": "HIGH",
+        "threat_detail": (
+            "Solana's Ed25519 signatures are vulnerable to quantum attack via "
+            "Shor's algorithm. With ~400 ms slots, Solana has the tightest timing "
+            "constraints of the three chains, making the PQC transition particularly "
+            "challenging -- larger signatures directly reduce the high throughput "
+            "that is Solana's primary value proposition."
+        ),
+        "migration_challenge": (
+            "**Throughput-critical:** Solana processes ~4,000 TPS (theoretical) with "
+            "Ed25519. PQC signatures are 10-500x larger, directly cutting throughput. "
+            "Additionally, 70-80% of block space is consumed by validator vote "
+            "transactions, which also need signature upgrades."
+        ),
+        "recommended_pqc": "Falcon-512",
+        "recommendation_reason": (
+            "Falcon-512 (666 B) offers the smallest PQC signatures, preserving "
+            "~80% of baseline throughput. ML-DSA-65 (NIST recommended) retains "
+            "~62% but provides a stronger security margin."
+        ),
+    },
+    "Bitcoin": {
+        "current_sig": "ECDSA / Schnorr",
+        "quantum_threat": "MODERATE",
+        "threat_detail": (
+            "Bitcoin's ECDSA (secp256k1) and Schnorr (BIP 340) signatures are "
+            "vulnerable to Shor's algorithm. However, Bitcoin's 10-minute block "
+            "time provides more room for larger signatures, and the SegWit witness "
+            "discount (1/4 weight) partially offsets PQC size increases."
+        ),
+        "migration_challenge": (
+            "**Consensus-critical:** Any signature scheme change requires a hard "
+            "fork or new SegWit version. The UTXO model means all outputs with "
+            "exposed public keys are vulnerable. Reused addresses (P2PKH with "
+            "known pubkey) are at highest risk."
+        ),
+        "recommended_pqc": "Falcon-512",
+        "recommendation_reason": (
+            "Falcon-512 benefits most from the SegWit discount and retains ~85% "
+            "of baseline capacity. Hybrid ECDSA+Falcon provides backward "
+            "compatibility during a transition period."
+        ),
+    },
+    "Ethereum": {
+        "current_sig": "ECDSA (secp256k1)",
+        "quantum_threat": "MODERATE-HIGH",
+        "threat_detail": (
+            "Ethereum's ECDSA signatures are vulnerable to Shor's algorithm. "
+            "The gas-based cost model means PQC migration cost scales with "
+            "calldata size (16 gas/byte). The planned gas limit increases "
+            "(30M to 180M by 2026) provide a natural buffer for absorbing "
+            "larger PQC signatures."
+        ),
+        "migration_challenge": (
+            "**Account-model advantage:** Unlike Bitcoin's UTXO model, Ethereum "
+            "accounts can be migrated individually via account abstraction (EIP-4337). "
+            "Smart contract wallets could adopt PQC signatures without a hard fork. "
+            "However, EOA migration requires protocol-level changes."
+        ),
+        "recommended_pqc": "Falcon-512 or ML-DSA-44",
+        "recommendation_reason": (
+            "At 180M gas limit (2026 target), even ML-DSA-65 retains ~55% of "
+            "ECDSA capacity. Falcon-512 retains ~85%. Account abstraction wallets "
+            "can adopt PQC independently of the base protocol."
+        ),
+    },
+}
+
+# Threat level color mapping for display
+THREAT_COLORS = {
+    "HIGH": "red",
+    "MODERATE-HIGH": "orange",
+    "MODERATE": "orange",
+    "LOW": "green",
+}
+
 
 def _algo_help(algo: str) -> str:
     """Return a short help string for an algorithm."""
@@ -78,6 +160,23 @@ def _format_bytes(n: int) -> str:
     if n >= 1024:
         return f"{n:,} B ({n / 1024:.1f} KB)"
     return f"{n:,} B"
+
+
+def _threat_badge(level: str) -> str:
+    """Return a colored threat level badge in markdown."""
+    return f":{THREAT_COLORS.get(level, 'gray')}[**{level}**]"
+
+
+def _throughput_impact_category(ratio: float) -> str:
+    """Categorize throughput impact for educational display."""
+    if ratio >= 0.9:
+        return ":green[Minimal Impact]"
+    elif ratio >= 0.7:
+        return ":orange[Moderate Impact]"
+    elif ratio >= 0.4:
+        return ":red[Significant Impact]"
+    else:
+        return ":red[Severe Impact]"
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +219,18 @@ with st.sidebar:
             "- **Falcon**: Compact signatures (pending FIPS as FN-DSA)"
         )
 
+    with st.expander("Why Blockchains Are Vulnerable"):
+        st.markdown(
+            "Every blockchain transaction requires a **digital signature** to prove "
+            "ownership. These signatures use elliptic-curve cryptography (Ed25519, "
+            "ECDSA, Schnorr) which is **broken by Shor's algorithm** on a sufficiently "
+            "powerful quantum computer.\n\n"
+            "**Key risk:** A quantum attacker could forge signatures to steal funds "
+            "from any address whose public key has been revealed on-chain.\n\n"
+            "The challenge: PQC signatures are **10x to 700x larger** than classical "
+            "ones, directly reducing blockchain throughput."
+        )
+
     with st.expander("Algorithm Families"):
         st.markdown(
             "| Family | Type | Basis | Standard |\n"
@@ -145,8 +256,9 @@ with st.sidebar:
     st.divider()
     st.caption("NAVIGATION")
     st.markdown(
-        "1. **Block-Space** -- Solana, Bitcoin & Ethereum impact\n"
-        "2. **Compare** -- Side-by-side algorithm comparison"
+        "1. **Block-Space** -- Per-chain impact analysis\n"
+        "2. **Compare** -- Side-by-side algorithm comparison\n"
+        "3. **Cross-Chain** -- Summary across all blockchains"
     )
 
 # ---------------------------------------------------------------------------
@@ -161,9 +273,10 @@ st.caption(
 # ---------------------------------------------------------------------------
 # Tab layout
 # ---------------------------------------------------------------------------
-tab_block, tab_compare = st.tabs([
+tab_block, tab_compare, tab_crosschain = st.tabs([
     "📊 Block-Space Visualizer",
     "⚖️ Side-by-Side Comparison",
+    "🌐 Cross-Chain Summary",
 ])
 
 # ===== TAB 1: Block-Space Visualizer =======================================
@@ -181,6 +294,20 @@ with tab_block:
         key="chain_select",
         help="Each blockchain has different block structure and size limits.",
     )
+
+    # ---- Quantum Vulnerability Assessment (per-chain) ----
+    ctx = CHAIN_QUANTUM_CONTEXT[chain]
+    with st.expander(f"Quantum Vulnerability Assessment: {chain}", expanded=True):
+        vc1, vc2 = st.columns([1, 1])
+        with vc1:
+            st.markdown(f"**Current Signature:** {ctx['current_sig']}")
+            st.markdown(f"**Quantum Threat Level:** {_threat_badge(ctx['quantum_threat'])}")
+            st.markdown(ctx["threat_detail"])
+        with vc2:
+            st.markdown(f"**Migration Challenge:**")
+            st.markdown(ctx["migration_challenge"])
+            st.markdown(f"**Recommended PQC:** {ctx['recommended_pqc']}")
+            st.caption(ctx["recommendation_reason"])
 
     # Multi-signer control (shared across all chains)
     num_signers = st.slider(
@@ -443,13 +570,22 @@ with tab_block:
 
         comp = compare_all_ethereum(eth_gas_limit, eth_base_overhead, eth_block_time, num_signers=num_signers)
 
-    # Results table
+    # Results table with impact indicators
     with col_results:
         st.markdown("##### Results Summary")
         if num_signers > 1:
             st.caption(f"Modeling **{num_signers} signers** per transaction")
         summary_rows = []
         for a in comp.analyses:
+            impact = ""
+            if a.relative_to_baseline >= 0.9:
+                impact = "Minimal"
+            elif a.relative_to_baseline >= 0.7:
+                impact = "Moderate"
+            elif a.relative_to_baseline >= 0.4:
+                impact = "Significant"
+            else:
+                impact = "Severe"
             summary_rows.append({
                 "Scheme": a.signature_type,
                 "Sig Size (B)": f"{a.signature_bytes:,}",
@@ -457,7 +593,7 @@ with tab_block:
                 "Txs/Block": f"{a.txs_per_block:,}",
                 "TPS": f"{a.throughput_tps:,.1f}",
                 "vs Baseline": f"{a.relative_to_baseline:.1%}",
-                "Sig Overhead": f"{a.signature_overhead_pct:.1f}%",
+                "Impact": impact,
             })
         summary_df = pd.DataFrame(summary_rows)
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
@@ -522,7 +658,7 @@ with tab_block:
             delta=f"{best_pqc.relative_to_baseline:.1%} of baseline",
             delta_color="inverse" if best_pqc.relative_to_baseline < 1 else "normal",
         )
-        st.caption(f"{best_pqc.throughput_tps:,.1f} TPS")
+        st.caption(f"{best_pqc.throughput_tps:,.1f} TPS | {_throughput_impact_category(best_pqc.relative_to_baseline)}")
     with kf3:
         st.metric(
             f"Worst: {worst.signature_type}",
@@ -530,7 +666,7 @@ with tab_block:
             delta=f"{worst.relative_to_baseline:.1%} of baseline",
             delta_color="inverse",
         )
-        st.caption(f"{worst.throughput_tps:,.1f} TPS")
+        st.caption(f"{worst.throughput_tps:,.1f} TPS | {_throughput_impact_category(worst.relative_to_baseline)}")
 
     st.info(
         f"Falcon-512 signatures (**{falcon_size} B**) are **{falcon_ratio}x smaller** "
@@ -538,6 +674,33 @@ with tab_block:
         "efficient PQC signature scheme for blockchain applications.",
         icon="💡",
     )
+
+    # Model Assumptions
+    st.divider()
+    with st.expander("Model Assumptions & Limitations"):
+        st.markdown(
+            "**What this model captures:**\n"
+            "- Signature and public key contribution to transaction size\n"
+            "- Block capacity limits (bytes for Solana, weight for Bitcoin, gas for Ethereum)\n"
+            "- SegWit witness discount for Bitcoin (1/4 weight for witness data)\n"
+            "- Gas-based calldata costing for Ethereum (16 gas per non-zero byte)\n"
+            "- Vote transaction overhead for Solana (configurable 0-85%)\n"
+            "- Multi-signer transactions (1-5 signers)\n\n"
+            "**What this model does NOT capture:**\n"
+            "- Verification time impact on block processing\n"
+            "- Network propagation delays from larger transactions\n"
+            "- Smart contract execution gas costs (Ethereum)\n"
+            "- Memory and storage costs for nodes\n"
+            "- Actual transaction mix (DEX swaps, token transfers, etc.)\n"
+            "- Compression techniques that could reduce PQC signature sizes\n"
+            "- Signature aggregation schemes (e.g., BLS aggregation)\n\n"
+            "**Sources:**\n"
+            "- NIST FIPS 203/204/205 for algorithm parameter sizes\n"
+            "- Solana docs for block structure and vote transaction estimates\n"
+            "- Bitcoin BIP 141 for SegWit witness discount rules\n"
+            "- Ethereum Yellow Paper for gas cost model\n"
+            "- Ethereum core dev discussions for 2024-2026 gas limit roadmap"
+        )
 
 # ===== TAB 2: Side-by-Side Comparison ======================================
 with tab_compare:
@@ -595,10 +758,13 @@ with tab_compare:
         for i, (algo, r) in enumerate(results.items()):
             with metric_cols[i % len(metric_cols)]:
                 st.markdown(f"**{algo}**")
+                algo_info = ALGO_INFO.get(algo.replace("Hybrid-Ed25519+", ""))
+                if algo_info:
+                    st.caption(algo_info[2])
                 st.metric("Signature", _format_bytes(r["sr"].signature_size))
                 ratio = r["sr"].signature_size / ED25519_PARAMS["signature"]
                 if ratio > 1.5:
-                    st.caption(f"{ratio:.1f}x Ed25519")
+                    st.caption(f"{ratio:.1f}x Ed25519 | {_throughput_impact_category(1 / ratio)}")
                 elif ratio == 1.0:
                     st.caption("(baseline)")
 
@@ -610,6 +776,7 @@ with tab_compare:
         for algo, r in results.items():
             rows.append({
                 "Algorithm": algo,
+                "Family": ALGO_INFO.get(algo.replace("Hybrid-Ed25519+", ""), ("", "", "Unknown"))[2],
                 "Public Key (B)": f"{len(r['kp'].public_key):,}",
                 "Secret Key (B)": f"{len(r['kp'].secret_key):,}",
                 "Signature (B)": f"{r['sr'].signature_size:,}",
@@ -630,6 +797,7 @@ with tab_compare:
         dl_df = pd.DataFrame([
             {
                 "Algorithm": algo,
+                "Family": ALGO_INFO.get(algo.replace("Hybrid-Ed25519+", ""), ("", "", "Unknown"))[2],
                 "Public Key Bytes": len(r["kp"].public_key),
                 "Secret Key Bytes": len(r["kp"].secret_key),
                 "Signature Bytes": r["sr"].signature_size,
@@ -647,3 +815,140 @@ with tab_compare:
             "text/csv",
             key="dl_compare",
         )
+
+# ===== TAB 3: Cross-Chain Summary ==========================================
+with tab_crosschain:
+    st.header("Cross-Chain PQC Impact Summary")
+    st.caption(
+        "Compare the impact of PQC migration across Solana, Bitcoin, and Ethereum "
+        "using default parameters for each chain."
+    )
+
+    # Run all three chain analyses with defaults
+    sol_comp = compare_all_solana(vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC)
+    btc_comp = compare_all_bitcoin()
+    eth_comp = compare_all_ethereum()
+
+    # Key PQC algorithms to highlight
+    highlight_algos = ["Falcon-512", "ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "SLH-DSA-128s"]
+
+    # Vulnerability overview
+    st.subheader("Quantum Vulnerability Overview")
+    ov1, ov2, ov3 = st.columns(3)
+    for col, (chain_name, ctx) in zip(
+        [ov1, ov2, ov3],
+        CHAIN_QUANTUM_CONTEXT.items(),
+    ):
+        with col:
+            st.markdown(f"### {chain_name}")
+            st.markdown(f"**Current:** {ctx['current_sig']}")
+            st.markdown(f"**Threat:** {_threat_badge(ctx['quantum_threat'])}")
+            st.markdown(f"**Best PQC:** {ctx['recommended_pqc']}")
+            st.caption(ctx["recommendation_reason"])
+
+    st.divider()
+
+    # Cross-chain comparison table
+    st.subheader("Throughput Retention by PQC Algorithm")
+    st.caption(
+        "Shows what percentage of current throughput each chain retains after "
+        "switching to a PQC signature scheme. Solana uses realistic (70% vote overhead) parameters."
+    )
+
+    cross_rows = []
+    for algo in highlight_algos:
+        row = {"Algorithm": algo, "Sig Size (B)": f"{SIGNATURE_SIZES[algo]:,}"}
+
+        # Solana (Ed25519-based, so skip ECDSA/Schnorr-only algos)
+        sol_analysis = next((a for a in sol_comp.analyses if a.signature_type == algo), None)
+        if sol_analysis:
+            row["Solana TPS"] = f"{sol_analysis.throughput_tps:,.1f}"
+            row["Solana Retention"] = f"{sol_analysis.relative_to_baseline:.1%}"
+        else:
+            row["Solana TPS"] = "N/A"
+            row["Solana Retention"] = "N/A"
+
+        # Bitcoin
+        btc_analysis = next((a for a in btc_comp.analyses if a.signature_type == algo), None)
+        if btc_analysis:
+            row["Bitcoin TPS"] = f"{btc_analysis.throughput_tps:,.2f}"
+            row["Bitcoin Retention"] = f"{btc_analysis.relative_to_baseline:.1%}"
+        else:
+            row["Bitcoin TPS"] = "N/A"
+            row["Bitcoin Retention"] = "N/A"
+
+        # Ethereum
+        eth_analysis = next((a for a in eth_comp.analyses if a.signature_type == algo), None)
+        if eth_analysis:
+            row["Ethereum TPS"] = f"{eth_analysis.throughput_tps:,.2f}"
+            row["Ethereum Retention"] = f"{eth_analysis.relative_to_baseline:.1%}"
+        else:
+            row["Ethereum TPS"] = "N/A"
+            row["Ethereum Retention"] = "N/A"
+
+        cross_rows.append(row)
+
+    st.dataframe(pd.DataFrame(cross_rows), use_container_width=True, hide_index=True)
+
+    # Baseline comparison
+    st.divider()
+    st.subheader("Current Baselines")
+    bc1, bc2, bc3 = st.columns(3)
+    with bc1:
+        st.metric("Solana (Ed25519)", f"{sol_comp.baseline.throughput_tps:,.1f} TPS")
+        st.caption(f"{sol_comp.baseline.txs_per_block:,} txs/block (70% vote overhead)")
+    with bc2:
+        st.metric("Bitcoin (ECDSA)", f"{btc_comp.baseline.throughput_tps:,.2f} TPS")
+        st.caption(f"{btc_comp.baseline.txs_per_block:,} txs/block (4 MWU, 10 min)")
+    with bc3:
+        st.metric("Ethereum (ECDSA)", f"{eth_comp.baseline.throughput_tps:,.2f} TPS")
+        st.caption(f"{eth_comp.baseline.txs_per_block:,} txs/block (30M gas, 12s)")
+
+    # Best PQC per chain
+    st.divider()
+    st.subheader("Best PQC Option Per Chain")
+
+    for chain_name, chain_comp in [("Solana", sol_comp), ("Bitcoin", btc_comp), ("Ethereum", eth_comp)]:
+        best = max(
+            [a for a in chain_comp.analyses if a.signature_type != chain_comp.baseline.signature_type],
+            key=lambda a: a.txs_per_block,
+        )
+        worst = min(chain_comp.analyses, key=lambda a: a.txs_per_block)
+
+        with st.expander(f"{chain_name}: Best = {best.signature_type}, Worst = {worst.signature_type}"):
+            b1, b2 = st.columns(2)
+            with b1:
+                st.markdown(f"**Best PQC: {best.signature_type}**")
+                st.markdown(f"- Retains **{best.relative_to_baseline:.1%}** of baseline throughput")
+                st.markdown(f"- {best.throughput_tps:,.1f} TPS ({best.txs_per_block:,} txs/block)")
+                st.markdown(f"- Signature: {_format_bytes(best.signature_bytes)}")
+                st.markdown(f"- Impact: {_throughput_impact_category(best.relative_to_baseline)}")
+            with b2:
+                st.markdown(f"**Worst PQC: {worst.signature_type}**")
+                st.markdown(f"- Retains **{worst.relative_to_baseline:.1%}** of baseline throughput")
+                st.markdown(f"- {worst.throughput_tps:,.1f} TPS ({worst.txs_per_block:,} txs/block)")
+                st.markdown(f"- Signature: {_format_bytes(worst.signature_bytes)}")
+                st.markdown(f"- Impact: {_throughput_impact_category(worst.relative_to_baseline)}")
+
+    # Download cross-chain summary
+    st.divider()
+    cross_dl_rows = []
+    for chain_name, chain_comp in [("Solana", sol_comp), ("Bitcoin", btc_comp), ("Ethereum", eth_comp)]:
+        for a in chain_comp.analyses:
+            cross_dl_rows.append({
+                "Chain": chain_name,
+                "Scheme": a.signature_type,
+                "Signature Bytes": a.signature_bytes,
+                "TX Size Bytes": a.tx_size_bytes,
+                "Txs Per Block": a.txs_per_block,
+                "TPS": a.throughput_tps,
+                "Relative to Baseline": a.relative_to_baseline,
+                "Signature Overhead Pct": a.signature_overhead_pct,
+            })
+    st.download_button(
+        "Download Cross-Chain Summary CSV",
+        pd.DataFrame(cross_dl_rows).to_csv(index=False),
+        "cross_chain_pqc_summary.csv",
+        "text/csv",
+        key="dl_crosschain",
+    )
