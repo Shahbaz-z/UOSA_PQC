@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 import reflex as rx
+import plotly.express as px
+import plotly.graph_objects as go
 
 from blockchain.solana_model import (
     compare_all_solana,
@@ -21,6 +23,14 @@ from blockchain.solana_model import (
     ETHEREUM_GAS_LIMITS,
     SIGNATURE_SIZES,
 )
+
+# Chart colors
+COLORS = {
+    "primary": "#3b82f6",
+    "secondary": "#10b981",
+    "warning": "#f59e0b",
+    "text": "#e5e7eb",
+}
 
 
 class BlockSpaceState(rx.State):
@@ -321,3 +331,74 @@ class BlockSpaceState(rx.State):
                 "Ethereum uses ECDSA (secp256k1) signatures with a gas-based cost model. "
                 "21,000 gas base + 16 gas per non-zero byte."
             )
+
+    # --- Chart Figures (computed as dicts for rx.plotly) ---
+
+    @rx.var
+    def block_space_chart_fig(self) -> dict:
+        """Horizontal bar chart showing txs_per_block."""
+        analyses = self.analysis_results
+        fig = px.bar(
+            x=[a["txs_per_block"] for a in analyses],
+            y=[a["scheme"] for a in analyses],
+            orientation="h",
+            color=[a["sig_size"] for a in analyses],
+            color_continuous_scale="RdYlGn_r",
+            labels={"x": "Txs per Block", "y": "Signature", "color": "Sig Size (B)"},
+        )
+        fig.update_layout(
+            title=f"{self.chain} Block Capacity by Signature Scheme",
+            yaxis={"categoryorder": "total ascending"},
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": COLORS["text"]},
+            height=400,
+        )
+        return fig.to_dict()
+
+    @rx.var
+    def throughput_chart_fig(self) -> dict:
+        """Bar chart of relative throughput vs baseline."""
+        analyses = self.analysis_results
+        fig = px.bar(
+            x=[a["scheme"] for a in analyses],
+            y=[a["vs_baseline"] for a in analyses],
+            color=[a["tps"] for a in analyses],
+            color_continuous_scale="Viridis",
+            labels={"x": "Signature", "y": "Relative Throughput (%)", "color": "TPS"},
+            text=[f"{a['vs_baseline']:.1f}%" for a in analyses],
+        )
+        fig.update_traces(textposition="outside")
+        fig.update_layout(
+            title=f"{self.chain}: Throughput Relative to Baseline (100% = parity)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": COLORS["text"]},
+            xaxis_tickangle=-45,
+            height=400,
+        )
+        return fig.to_dict()
+
+    @rx.var
+    def signature_size_chart_fig(self) -> dict:
+        """Stacked bar showing signature vs base overhead."""
+        analyses = self.analysis_results
+        schemes = [a["scheme"] for a in analyses]
+        sig_sizes = [a["sig_size"] for a in analyses]
+        base_sizes = [a["tx_size"] - a["sig_size"] for a in analyses]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="Base Overhead", x=schemes, y=base_sizes, marker_color=COLORS["secondary"]))
+        fig.add_trace(go.Bar(name="Signature", x=schemes, y=sig_sizes, marker_color=COLORS["primary"]))
+
+        fig.update_layout(
+            barmode="stack",
+            title=f"{self.chain}: Transaction Size Breakdown",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": COLORS["text"]},
+            xaxis_tickangle=-45,
+            yaxis_title="Bytes",
+            height=400,
+        )
+        return fig.to_dict()

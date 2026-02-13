@@ -13,9 +13,6 @@ from app_reflex.styles.theme import COLORS
 
 def block_space_chart_component(analyses: List[Dict[str, Any]], chain: str = "Solana") -> rx.Component:
     """Horizontal bar chart showing txs_per_block for each signature type."""
-    if not analyses:
-        return rx.text("No data available", color=COLORS["text_muted"])
-
     fig = px.bar(
         x=[a["txs_per_block"] for a in analyses],
         y=[a["scheme"] for a in analyses],
@@ -38,9 +35,6 @@ def block_space_chart_component(analyses: List[Dict[str, Any]], chain: str = "So
 
 def throughput_chart_component(analyses: List[Dict[str, Any]], chain: str = "Solana") -> rx.Component:
     """Bar chart of relative throughput vs baseline."""
-    if not analyses:
-        return rx.text("No data available", color=COLORS["text_muted"])
-
     fig = px.bar(
         x=[a["scheme"] for a in analyses],
         y=[a["vs_baseline"] for a in analyses],
@@ -64,9 +58,6 @@ def throughput_chart_component(analyses: List[Dict[str, Any]], chain: str = "Sol
 
 def signature_size_chart_component(analyses: List[Dict[str, Any]], chain: str = "Solana") -> rx.Component:
     """Stacked bar showing signature vs base overhead per transaction."""
-    if not analyses:
-        return rx.text("No data available", color=COLORS["text_muted"])
-
     schemes = [a["scheme"] for a in analyses]
     sig_sizes = [a["sig_size"] for a in analyses]
     base_sizes = [a["tx_size"] - a["sig_size"] for a in analyses]
@@ -91,9 +82,6 @@ def signature_size_chart_component(analyses: List[Dict[str, Any]], chain: str = 
 
 def comparison_chart_component(results: Dict[str, Dict[str, Any]]) -> rx.Component:
     """Dual-axis comparison chart: signature size (bars) and sign time (line)."""
-    if not results:
-        return rx.text("Run comparison to see chart", color=COLORS["text_muted"])
-
     algos = list(results.keys())
     sizes = [results[a]["sig_size"] for a in algos]
     times = [results[a]["sign_ms"] for a in algos]

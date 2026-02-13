@@ -5,11 +5,6 @@ from __future__ import annotations
 import reflex as rx
 
 from app_reflex.state.block_space import BlockSpaceState
-from app_reflex.components.charts import (
-    block_space_chart_component,
-    throughput_chart_component,
-    signature_size_chart_component,
-)
 from app_reflex.styles.theme import COLORS
 
 
@@ -389,11 +384,11 @@ def block_space_page() -> rx.Component:
         rx.text("Visualizations", weight="bold", size="4"),
         rx.grid(
             rx.box(
-                block_space_chart_component(BlockSpaceState.analysis_results, BlockSpaceState.chain),
+                rx.plotly(data=BlockSpaceState.block_space_chart_fig),
                 padding="4",
             ),
             rx.box(
-                throughput_chart_component(BlockSpaceState.analysis_results, BlockSpaceState.chain),
+                rx.plotly(data=BlockSpaceState.throughput_chart_fig),
                 padding="4",
             ),
             columns="2",
@@ -401,7 +396,7 @@ def block_space_page() -> rx.Component:
             width="100%",
         ),
         rx.box(
-            signature_size_chart_component(BlockSpaceState.analysis_results, BlockSpaceState.chain),
+            rx.plotly(data=BlockSpaceState.signature_size_chart_fig),
             padding="4",
             width="100%",
         ),

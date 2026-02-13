@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 import reflex as rx
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
 from pqc_lib.mock import ED25519_PARAMS
+
+# Chart colors
+COLORS = {
+    "primary": "#3b82f6",
+    "warning": "#f59e0b",
+    "text": "#e5e7eb",
+}
 
 
 class ComparisonState(rx.State):
@@ -147,3 +156,57 @@ class ComparisonState(rx.State):
             "sig_sizes": [self.compare_results[a]["sig_size"] for a in algos],
             "sign_times": [self.compare_results[a]["sign_ms"] for a in algos],
         }
+
+    @rx.var
+    def comparison_chart_fig(self) -> dict:
+        """Dual-axis comparison chart: signature size (bars) and sign time (line)."""
+        if not self.compare_results:
+            # Return empty figure
+            return go.Figure().to_dict()
+
+        algos = list(self.compare_results.keys())
+        sizes = [self.compare_results[a]["sig_size"] for a in algos]
+        times = [self.compare_results[a]["sign_ms"] for a in algos]
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        fig.add_trace(
+            go.Bar(
+                name="Signature Size (bytes)",
+                x=algos,
+                y=sizes,
+                marker_color=COLORS["primary"],
+                opacity=0.8,
+                text=[f"{s:,} B" for s in sizes],
+                textposition="outside",
+            ),
+            secondary_y=False,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                name="Sign Time (ms)",
+                x=algos,
+                y=times,
+                mode="lines+markers+text",
+                marker=dict(size=10, color=COLORS["warning"]),
+                line=dict(color=COLORS["warning"], width=2),
+                text=[f"{t:.3f}" for t in times],
+                textposition="top center",
+            ),
+            secondary_y=True,
+        )
+
+        fig.update_layout(
+            title="Algorithm Comparison: Signature Size vs Sign Time",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": COLORS["text"]},
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            xaxis_tickangle=-45,
+            height=450,
+        )
+        fig.update_yaxes(title_text="Signature Size (bytes)", secondary_y=False)
+        fig.update_yaxes(title_text="Sign Time (ms)", secondary_y=True)
+
+        return fig.to_dict()

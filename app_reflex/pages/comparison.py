@@ -5,7 +5,6 @@ from __future__ import annotations
 import reflex as rx
 
 from app_reflex.state.comparison import ComparisonState
-from app_reflex.components.charts import comparison_chart_component
 from app_reflex.styles.theme import COLORS
 
 
@@ -217,7 +216,7 @@ def comparison_page() -> rx.Component:
             ComparisonState.has_results,
             rx.vstack(
                 rx.text("Visual Comparison", weight="bold", size="4"),
-                comparison_chart_component(ComparisonState.compare_results),
+                rx.plotly(data=ComparisonState.comparison_chart_fig),
                 spacing="4",
                 width="100%",
             ),
