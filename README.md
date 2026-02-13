@@ -71,24 +71,34 @@ pqc_lib/                PQC algorithm wrappers
   utils.py              Timing and memory profiling utilities
 
 blockchain/             Blockchain impact modeling
-  solana_model.py       Solana, Bitcoin, and Ethereum block-space analysis
+  chain_models.py       Solana, Bitcoin, and Ethereum block-space analysis
   zk_models.py          ZK-STARK/ZK-SNARK proof system models
   qr_score.py           Quantum resistance readiness scoring model
 
 app/                    Streamlit application
-  pqc_demo_streamlit.py Main app (5 tabs)
+  pqc_demo_streamlit.py Main orchestrator (sidebar, page config, tab setup)
+  tabs/                 Per-tab rendering modules
+    block_space.py      Tab 1: Block-Space Visualizer
+    comparison.py       Tab 2: Side-by-Side Comparison
+    cross_chain.py      Tab 3: Cross-Chain Summary
+    zk_proofs.py        Tab 4: ZK Proof Analysis
+    qr_score.py         Tab 5: QR Score
   components/
     charts.py           Reusable Plotly chart builders (10 chart functions)
 
 benchmarks/             Benchmark harness and results
   bench.py              CLI benchmark runner with CSV export
 
-tests/                  Unit tests (pytest)
+tests/                  Unit tests (pytest, 364 tests)
   test_signatures.py    Signature algorithm tests
   test_kem.py           KEM algorithm tests
-  test_solana_model.py  Blockchain model tests (all 3 chains)
+  test_solana_model.py  Blockchain model tests (all 3 chains + input validation)
   test_zk_models.py     ZK proof system tests
   test_qr_score.py      QR scoring model tests
+  test_charts.py        Chart function tests (all 10 chart builders)
+
+.github/workflows/      CI/CD
+  ci.yml                GitHub Actions: test + lint on Python 3.10-3.12
 
 docs/                   Methodology documentation
 ```

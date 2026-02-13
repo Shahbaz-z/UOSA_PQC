@@ -164,6 +164,9 @@ class ZKProofAnalysis:
     # Comparison metrics
     relative_to_ecdsa: float        # vs ECDSA baseline (signature-only tx)
     gas_overhead_vs_ecdsa: float    # additional gas vs ECDSA tx
+    # Amortized metrics (when batching multiple user txs per proof)
+    batch_size: int = 1             # number of user transactions per proof
+    amortized_gas_per_tx: float = 0.0  # total_tx_gas / batch_size
 
 
 @dataclass
@@ -201,6 +204,7 @@ def analyze_zk_proof_throughput(
     base_tx_gas: int = ETH_BASE_TX_GAS,
     calldata_gas_per_byte: int = ETH_CALLDATA_GAS_PER_BYTE,
     include_calldata_cost: bool = True,
+    batch_size: int = 1,
 ) -> ZKProofAnalysis:
     """Analyze throughput impact of a ZK proof system on Ethereum.
 
@@ -217,21 +221,30 @@ def analyze_zk_proof_throughput(
         calldata_gas_per_byte: Gas per byte of calldata
         include_calldata_cost: If True, add calldata cost for proof bytes.
             Set False to model proof verification via precompile only.
+        batch_size: Number of user transactions covered by a single proof.
+            Default 1 (single-proof-per-transaction).
+            Set >1 to model ZK rollup amortized costs (e.g. 1000 for a
+            typical rollup batch).
     """
     if proof_system not in ZK_PROOF_SYSTEMS:
         raise ValueError(
             f"Unknown proof system: {proof_system}. "
             f"Valid systems: {list(ZK_PROOF_SYSTEMS.keys())}"
         )
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
     params = ZK_PROOF_SYSTEMS[proof_system]
 
-    # Total gas per transaction with ZK proof
+    # Total gas per on-chain proof transaction
     calldata_gas = (params.proof_bytes * calldata_gas_per_byte) if include_calldata_cost else 0
     total_tx_gas = base_tx_gas + calldata_gas + params.verification_gas
 
     txs_per_block = block_gas_limit // total_tx_gas
     tps = txs_per_block / (block_time_ms / 1000)
+
+    # Amortized gas per user transaction
+    amortized_gas = total_tx_gas / batch_size
 
     # ECDSA baseline
     ecdsa_txs = block_gas_limit // ECDSA_TX_GAS
@@ -248,6 +261,8 @@ def analyze_zk_proof_throughput(
         proof_family=params.proof_family,
         relative_to_ecdsa=round(txs_per_block / ecdsa_txs, 4) if ecdsa_txs > 0 else 0,
         gas_overhead_vs_ecdsa=round((total_tx_gas - ECDSA_TX_GAS) / ECDSA_TX_GAS, 4),
+        batch_size=batch_size,
+        amortized_gas_per_tx=round(amortized_gas, 2),
     )
 
 
@@ -327,12 +342,12 @@ def build_zk_vs_signatures_table(
     Returns a list of dicts suitable for DataFrame construction, comparing
     throughput across ZK proof systems and selected signature schemes.
     """
-    from blockchain.solana_model import (
+    from blockchain.chain_models import (
         SIGNATURE_SIZES, PUBLIC_KEY_SIZES,
         analyze_ethereum_block_space,
     )
 
-    rows = []
+    rows: List[dict] = []
 
     # ZK proof systems
     for system_name, params in ZK_PROOF_SYSTEMS.items():
@@ -360,11 +375,12 @@ def build_zk_vs_signatures_table(
                 sig, block_gas_limit=block_gas_limit,
                 block_time_ms=block_time_ms,
             )
+            tx_gas = (block_gas_limit // analysis.txs_per_block) if analysis.txs_per_block > 0 else 0
             rows.append({
                 "Scheme": sig,
                 "Type": "Signature",
                 "Size (B)": SIGNATURE_SIZES[sig] + PUBLIC_KEY_SIZES[sig],
-                "Tx Gas": analysis.txs_per_block and (block_gas_limit // analysis.txs_per_block),
+                "Tx Gas": tx_gas,
                 "Txs/Block": analysis.txs_per_block,
                 "TPS": analysis.throughput_tps,
                 "Quantum Resistant": "No" if sig in classical_sigs else "Yes",

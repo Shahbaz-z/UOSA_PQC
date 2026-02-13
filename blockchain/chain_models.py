@@ -172,6 +172,18 @@ class ComparativeAnalysis:
 # Solana model
 # ---------------------------------------------------------------------------
 
+def _validate_positive(name: str, value: int | float) -> None:
+    """Raise ValueError if *value* is not positive."""
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+
+
+def _validate_fraction(name: str, value: float) -> None:
+    """Raise ValueError if *value* is not in [0, 1]."""
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be between 0.0 and 1.0, got {value}")
+
+
 def analyze_solana_block_space(
     signature_type: str,
     block_size: int = SOLANA_BLOCK_SIZE_BYTES,
@@ -192,6 +204,10 @@ def analyze_solana_block_space(
             f"Unknown signature type: {signature_type}. "
             f"Valid types: {list(SIGNATURE_SIZES.keys())}"
         )
+    _validate_positive("block_size", block_size)
+    _validate_positive("slot_time_ms", slot_time_ms)
+    _validate_positive("num_signers", num_signers)
+    _validate_fraction("vote_tx_pct", vote_tx_pct)
 
     # Calculate available block space after vote transaction overhead
     available_block_space = int(block_size * (1.0 - vote_tx_pct))
@@ -259,6 +275,11 @@ def analyze_bitcoin_block_space(
             f"Unknown signature type: {signature_type}. "
             f"Valid types: {list(SIGNATURE_SIZES.keys())}"
         )
+    _validate_positive("block_weight", block_weight)
+    _validate_positive("block_time_ms", block_time_ms)
+    _validate_positive("witness_discount", witness_discount)
+    _validate_positive("num_signers", num_signers)
+
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
 
@@ -321,6 +342,7 @@ def analyze_ethereum_block_space(
     base_tx_gas: int = ETHEREUM_BASE_TX_GAS,
     calldata_gas_per_byte: int = ETHEREUM_CALLDATA_GAS_PER_BYTE,
     num_signers: int = 1,
+    execution_gas: int = 0,
 ) -> BlockAnalysis:
     """Calculate how many transactions fit in an Ethereum block.
 
@@ -328,29 +350,40 @@ def analyze_ethereum_block_space(
     - 16 gas per non-zero byte (conservative: assume all non-zero)
     - 21,000 base gas per transaction
     - Additional gas for non-signature calldata (to, value, etc.)
+
+    Args:
+        execution_gas: Additional execution gas per transaction (e.g. contract
+            logic, storage operations).  Default 0 models simple transfers.
+            Typical values: ~65,000 for ERC-20 transfer, ~150,000+ for DEX swap.
     """
     if signature_type not in SIGNATURE_SIZES:
         raise ValueError(
             f"Unknown signature type: {signature_type}. "
             f"Valid types: {list(SIGNATURE_SIZES.keys())}"
         )
+    _validate_positive("block_gas_limit", block_gas_limit)
+    _validate_positive("block_time_ms", block_time_ms)
+    _validate_positive("base_tx_gas", base_tx_gas)
+    _validate_positive("calldata_gas_per_byte", calldata_gas_per_byte)
+    _validate_positive("num_signers", num_signers)
+
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
 
     # Gas cost per transaction
     calldata_bytes = sig_size + pk_size + base_tx_overhead
-    tx_gas = base_tx_gas + (calldata_bytes * calldata_gas_per_byte)
+    tx_gas = base_tx_gas + (calldata_bytes * calldata_gas_per_byte) + execution_gas
     txs_per_block = block_gas_limit // tx_gas
     tps = txs_per_block / (block_time_ms / 1000)
 
     # Equivalent "transaction size" for display (calldata bytes)
     tx_size = base_tx_overhead + sig_size + pk_size
 
-    # Baseline: ECDSA
+    # Baseline: ECDSA (with same execution gas)
     ecdsa_sig = SIGNATURE_SIZES["ECDSA"] * num_signers
     ecdsa_pk = PUBLIC_KEY_SIZES["ECDSA"] * num_signers
     ecdsa_calldata = ecdsa_sig + ecdsa_pk + base_tx_overhead
-    ecdsa_gas = base_tx_gas + (ecdsa_calldata * calldata_gas_per_byte)
+    ecdsa_gas = base_tx_gas + (ecdsa_calldata * calldata_gas_per_byte) + execution_gas
     ecdsa_txs = block_gas_limit // ecdsa_gas
 
     # Signature overhead
@@ -384,21 +417,6 @@ def compare_all_ethereum(
     ]
     baseline = next(a for a in analyses if a.signature_type == "ECDSA")
     return ComparativeAnalysis(chain="Ethereum", baseline=baseline, analyses=analyses)
-
-
-# ---------------------------------------------------------------------------
-# Backwards-compatible aliases (used by existing tests and Streamlit app)
-# ---------------------------------------------------------------------------
-def analyze_block_space(signature_type, block_size=SOLANA_BLOCK_SIZE_BYTES,
-                        base_tx_overhead=SOLANA_BASE_TX_OVERHEAD,
-                        slot_time_ms=SOLANA_SLOT_TIME_MS):
-    return analyze_solana_block_space(signature_type, block_size, base_tx_overhead, slot_time_ms)
-
-
-def compare_all(block_size=SOLANA_BLOCK_SIZE_BYTES,
-                base_tx_overhead=SOLANA_BASE_TX_OVERHEAD,
-                slot_time_ms=SOLANA_SLOT_TIME_MS):
-    return compare_all_solana(block_size, base_tx_overhead, slot_time_ms)
 
 
 if __name__ == "__main__":

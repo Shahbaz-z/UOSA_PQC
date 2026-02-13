@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-from blockchain.solana_model import (
+from blockchain.chain_models import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
     SIGNATURE_SIZES, PUBLIC_KEY_SIZES,
     SOLANA_VOTE_TX_PCT_REALISTIC,
@@ -236,26 +236,33 @@ def _algorithm_diversity_score(chain: str) -> DimensionScore:
     else:
         comp = compare_all_ethereum()
 
-    # Count PQC families with >10% retention
+    # Count distinct PQC algorithm families with >10% throughput retention.
+    # Hybrid schemes are NOT counted as a separate family because they derive
+    # their quantum resistance from the underlying PQC component (e.g.
+    # Hybrid-Ed25519+Falcon-512 uses the Falcon family).
     families_seen = set()
     for a in comp.analyses:
-        if a.signature_type == comp.baseline.signature_type:
+        if a.signature_type in CLASSICAL_SIGS:
             continue
         if a.relative_to_baseline >= 0.10:
-            # Determine family
             name = a.signature_type
-            if name.startswith("ML-DSA"):
+            if name.startswith("Hybrid-Ed25519+"):
+                # Extract underlying PQC family
+                pqc_part = name.replace("Hybrid-Ed25519+", "")
+                if pqc_part.startswith("ML-DSA"):
+                    families_seen.add("ML-DSA")
+                elif pqc_part.startswith("Falcon"):
+                    families_seen.add("Falcon")
+            elif name.startswith("ML-DSA"):
                 families_seen.add("ML-DSA")
             elif name.startswith("SLH-DSA"):
                 families_seen.add("SLH-DSA")
             elif name.startswith("Falcon"):
                 families_seen.add("Falcon")
-            elif name.startswith("Hybrid"):
-                families_seen.add("Hybrid")
 
-    # 4 possible families: ML-DSA, SLH-DSA, Falcon, Hybrid
-    # Score: 25 per viable family
-    score = min(100, len(families_seen) * 25)
+    # 3 possible independent families: ML-DSA (lattice), SLH-DSA (hash), Falcon (NTRU)
+    # Score: 33 per viable family, capped at 100
+    score = min(100, len(families_seen) * 33)
 
     return DimensionScore(
         dimension="algorithm_diversity",
@@ -339,14 +346,16 @@ def score_chain(chain: str) -> ChainQRScore:
     pqc = [a for a in comp.analyses if a.signature_type not in CLASSICAL_SIGS]
     best = max(pqc, key=lambda a: a.relative_to_baseline)
 
+    rounded_composite = round(composite, 1)
+
     return ChainQRScore(
         chain=chain,
-        composite_score=round(composite, 1),
-        grade=_letter_grade(composite),
+        composite_score=rounded_composite,
+        grade=_letter_grade(rounded_composite),
         dimensions=dimensions,
         best_pqc_algorithm=best.signature_type,
         best_pqc_retention=best.relative_to_baseline,
-        recommendation=_recommendation(chain, composite, best.signature_type),
+        recommendation=_recommendation(chain, rounded_composite, best.signature_type),
     )
 
 

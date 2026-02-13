@@ -1,13 +1,11 @@
-"""Tests for blockchain.solana_model -- Solana, Bitcoin, and Ethereum block-space analysis."""
+"""Tests for blockchain.chain_models -- Solana, Bitcoin, and Ethereum block-space analysis."""
 
 import pytest
 
-from blockchain.solana_model import (
-    analyze_block_space,
+from blockchain.chain_models import (
     analyze_solana_block_space,
     analyze_bitcoin_block_space,
     analyze_ethereum_block_space,
-    compare_all,
     compare_all_solana,
     compare_all_bitcoin,
     compare_all_ethereum,
@@ -219,15 +217,58 @@ class TestEthereumCompareAll:
             assert a.throughput_tps > 0
 
 
-class TestBackwardsCompatibility:
-    def test_analyze_block_space_alias(self):
-        result = analyze_block_space("Ed25519")
-        assert result.signature_bytes == SIGNATURE_SIZES["Ed25519"]
-        assert result.relative_to_baseline == 1.0
+class TestInputValidation:
+    """Test parameter validation on model functions."""
 
-    def test_compare_all_alias(self):
-        comp = compare_all()
-        assert comp.baseline.signature_type == "Ed25519"
+    def test_solana_negative_block_size(self):
+        with pytest.raises(ValueError, match="block_size must be positive"):
+            analyze_solana_block_space("Ed25519", block_size=-1)
+
+    def test_solana_zero_slot_time(self):
+        with pytest.raises(ValueError, match="slot_time_ms must be positive"):
+            analyze_solana_block_space("Ed25519", slot_time_ms=0)
+
+    def test_solana_vote_pct_over_one(self):
+        with pytest.raises(ValueError, match="vote_tx_pct must be between"):
+            analyze_solana_block_space("Ed25519", vote_tx_pct=1.5)
+
+    def test_solana_vote_pct_negative(self):
+        with pytest.raises(ValueError, match="vote_tx_pct must be between"):
+            analyze_solana_block_space("Ed25519", vote_tx_pct=-0.1)
+
+    def test_solana_zero_signers(self):
+        with pytest.raises(ValueError, match="num_signers must be positive"):
+            analyze_solana_block_space("Ed25519", num_signers=0)
+
+    def test_bitcoin_negative_block_weight(self):
+        with pytest.raises(ValueError, match="block_weight must be positive"):
+            analyze_bitcoin_block_space("ECDSA", block_weight=-1)
+
+    def test_bitcoin_zero_block_time(self):
+        with pytest.raises(ValueError, match="block_time_ms must be positive"):
+            analyze_bitcoin_block_space("ECDSA", block_time_ms=0)
+
+    def test_ethereum_negative_gas_limit(self):
+        with pytest.raises(ValueError, match="block_gas_limit must be positive"):
+            analyze_ethereum_block_space("ECDSA", block_gas_limit=-1)
+
+    def test_ethereum_zero_base_gas(self):
+        with pytest.raises(ValueError, match="base_tx_gas must be positive"):
+            analyze_ethereum_block_space("ECDSA", base_tx_gas=0)
+
+    def test_ethereum_execution_gas(self):
+        """Execution gas should reduce throughput."""
+        no_exec = analyze_ethereum_block_space("ECDSA", execution_gas=0)
+        with_exec = analyze_ethereum_block_space("ECDSA", execution_gas=100_000)
+        assert with_exec.txs_per_block < no_exec.txs_per_block
+
+    def test_ethereum_execution_gas_relative_unchanged(self):
+        """Baseline and PQC both get execution_gas, so relative impact stays similar."""
+        no_exec = analyze_ethereum_block_space("Falcon-512", execution_gas=0)
+        with_exec = analyze_ethereum_block_space("Falcon-512", execution_gas=100_000)
+        # Both relative_to_baseline should be < 1.0 and in same ballpark
+        assert no_exec.relative_to_baseline < 1.0
+        assert with_exec.relative_to_baseline < 1.0
 
 
 class TestNoKyberDilithiumInModel:

@@ -12,9 +12,13 @@ IMPORTANT -- Mock mode limitations:
     Use real liboqs for security-relevant testing.
 """
 
+import logging
 import os
 import hashlib
+import warnings
 from typing import Tuple
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Detect mock mode
@@ -29,6 +33,17 @@ try:
     MOCK_MODE = False
 except ImportError:
     MOCK_MODE = True
+
+# Emit a clear warning so operators notice mock mode in logs/stderr.
+if MOCK_MODE:
+    _reason = "PQC_MOCK=1 environment variable" if _force_mock else "liboqs not installed"
+    _msg = (
+        f"PQC library running in MOCK MODE ({_reason}). "
+        "Artifact sizes are NIST-accurate but NO cryptographic security is provided. "
+        "Do NOT use mock mode in production."
+    )
+    warnings.warn(_msg, stacklevel=1)
+    _log.warning(_msg)
 
 # ---------------------------------------------------------------------------
 # Algorithm size tables (bytes) -- sourced from NIST PQC standards

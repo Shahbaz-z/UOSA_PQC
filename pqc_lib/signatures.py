@@ -24,11 +24,19 @@ if not MOCK_MODE:
     import oqs
     try:
         from nacl.signing import SigningKey, VerifyKey
+        from nacl import exceptions as nacl_exc
         _HAS_NACL = True
     except ImportError:
         _HAS_NACL = False
 else:
     _HAS_NACL = False
+
+# Provide a stub so the except clause in _ed25519_verify compiles even
+# when nacl is not installed (the branch is unreachable in that case).
+if not _HAS_NACL:
+    class _NaclExcStub:
+        BadSignatureError = type("BadSignatureError", (Exception,), {})
+    nacl_exc = _NaclExcStub()  # type: ignore[assignment]
 
 SIG_ALGORITHMS = list(SIG_PARAMS.keys()) + ["Ed25519"]
 
@@ -72,7 +80,8 @@ class VerifyResult:
 # Internal helpers
 # ------------------------------------------------------------------
 
-def _ed25519_keygen():
+def _ed25519_keygen() -> tuple[bytes, bytes]:
+    """Generate an Ed25519 keypair, returning ``(public_key, secret_key)``."""
     if MOCK_MODE or not _HAS_NACL:
         from pqc_lib.mock import mock_ed25519_keygen
         return mock_ed25519_keygen()
@@ -82,6 +91,7 @@ def _ed25519_keygen():
 
 
 def _ed25519_sign(secret_key: bytes, message: bytes) -> bytes:
+    """Sign *message* with an Ed25519 secret key, returning the raw signature."""
     if MOCK_MODE or not _HAS_NACL:
         from pqc_lib.mock import mock_ed25519_sign
         return mock_ed25519_sign(secret_key, message)
@@ -91,6 +101,7 @@ def _ed25519_sign(secret_key: bytes, message: bytes) -> bytes:
 
 
 def _ed25519_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Verify an Ed25519 *signature* over *message* with *public_key*."""
     if MOCK_MODE or not _HAS_NACL:
         from pqc_lib.mock import mock_ed25519_verify
         return mock_ed25519_verify(public_key, message, signature)
@@ -98,12 +109,12 @@ def _ed25519_verify(public_key: bytes, message: bytes, signature: bytes) -> bool
         vk = VerifyKey(public_key)
         vk.verify(message, signature)
         return True
-    except Exception:
+    except (ValueError, TypeError, nacl_exc.BadSignatureError):
         return False
 
 
-def _pqc_keygen(algorithm: str):
-    """Generate keypair for any PQC algorithm in SIG_PARAMS."""
+def _pqc_keygen(algorithm: str) -> tuple[bytes, bytes]:
+    """Generate a PQC keypair, returning ``(public_key, secret_key)``."""
     if MOCK_MODE:
         from pqc_lib.mock import mock_sig_keygen
         return mock_sig_keygen(algorithm)
@@ -114,7 +125,7 @@ def _pqc_keygen(algorithm: str):
 
 
 def _pqc_sign(algorithm: str, secret_key: bytes, message: bytes) -> bytes:
-    """Sign with any PQC algorithm in SIG_PARAMS."""
+    """Sign *message* with a PQC secret key, returning the raw signature."""
     if MOCK_MODE:
         from pqc_lib.mock import mock_sign
         return mock_sign(algorithm, secret_key, message)
@@ -123,7 +134,7 @@ def _pqc_sign(algorithm: str, secret_key: bytes, message: bytes) -> bytes:
 
 
 def _pqc_verify(algorithm: str, public_key: bytes, message: bytes, signature: bytes) -> bool:
-    """Verify with any PQC algorithm in SIG_PARAMS."""
+    """Verify a PQC *signature* over *message* with *public_key*."""
     if MOCK_MODE:
         from pqc_lib.mock import mock_verify
         return mock_verify(algorithm, public_key, message, signature)

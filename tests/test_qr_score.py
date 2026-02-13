@@ -236,16 +236,23 @@ class TestAlgorithmDiversityScore:
         assert 0 <= result.score <= 100
 
     @pytest.mark.parametrize("chain", ["Solana", "Bitcoin", "Ethereum"])
-    def test_score_is_multiple_of_25(self, chain):
-        """Score should be 25 per viable family (0, 25, 50, 75, or 100)."""
+    def test_score_is_multiple_of_33(self, chain):
+        """Score should be 33 per viable family (0, 33, 66, 99)."""
         result = _algorithm_diversity_score(chain)
-        assert result.score % 25 == 0
+        assert result.score % 33 == 0
 
     @pytest.mark.parametrize("chain", ["Solana", "Bitcoin", "Ethereum"])
     def test_at_least_one_family(self, chain):
         """Every chain should have at least one viable PQC family."""
         result = _algorithm_diversity_score(chain)
-        assert result.score >= 25
+        assert result.score >= 33
+
+    @pytest.mark.parametrize("chain", ["Solana", "Bitcoin", "Ethereum"])
+    def test_hybrid_not_counted_as_separate_family(self, chain):
+        """Hybrid schemes should not inflate the family count."""
+        result = _algorithm_diversity_score(chain)
+        # Should never mention 'Hybrid' as a standalone family
+        assert "Hybrid" not in result.detail
 
 
 # ---------------------------------------------------------------------------

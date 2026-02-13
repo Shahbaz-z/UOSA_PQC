@@ -9,7 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from blockchain.solana_model import BlockAnalysis
+from blockchain.chain_models import BlockAnalysis
 from blockchain.zk_models import ZKProofAnalysis
 
 # Consistent color scheme for PQC families
