@@ -25,7 +25,7 @@ def sidebar() -> rx.Component:
                 AppState.mock_mode,
                 rx.callout(
                     "Mock mode -- liboqs not available. Sizes accurate; timing synthetic.",
-                    icon="alert-triangle",
+                    icon="triangle-alert",
                     color="orange",
                     size="1",
                 ),

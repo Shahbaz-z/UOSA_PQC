@@ -225,7 +225,6 @@ def results_table() -> rx.Component:
             {"header": "TPS", "accessor": "tps"},
             {"header": "vs Baseline", "accessor": "vs_baseline"},
         ],
-        pagination=rx.data_table.pagination(page_size=10),
     )
 
 

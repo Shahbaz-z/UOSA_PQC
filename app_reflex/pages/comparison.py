@@ -156,7 +156,6 @@ def results_table() -> rx.Component:
                     {"header": "Verify (ms)", "accessor": "verify_ms"},
                     {"header": "vs Ed25519", "accessor": "vs_ed25519"},
                 ],
-                pagination=rx.data_table.pagination(page_size=15),
             ),
             spacing="4",
             width="100%",
