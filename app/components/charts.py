@@ -315,6 +315,102 @@ def zk_vs_signatures_chart(table_rows: List[dict]) -> go.Figure:
     return fig
 
 
+def qr_radar_chart(chain_scores) -> go.Figure:
+    """Radar chart showing QR score dimensions for all chains.
+
+    *chain_scores*: list of ChainQRScore objects.
+    """
+    chain_colors = {
+        "Solana": "#1f77b4",
+        "Bitcoin": "#ff7f0e",
+        "Ethereum": "#2ca02c",
+    }
+
+    fig = go.Figure()
+    for cs in chain_scores:
+        categories = [d.dimension.replace("_", " ").title() for d in cs.dimensions]
+        values = [d.score for d in cs.dimensions]
+        # Close the polygon
+        categories.append(categories[0])
+        values.append(values[0])
+
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill="toself",
+            name=f"{cs.chain} ({cs.composite_score:.0f}, {cs.grade})",
+            line=dict(color=chain_colors.get(cs.chain, "#7f7f7f")),
+            opacity=0.6,
+        ))
+
+    fig.update_layout(
+        title="Quantum Resistance Score by Dimension",
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+        font=dict(size=12),
+        title_font_size=16,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+    )
+    return fig
+
+
+def qr_composite_bar_chart(chain_scores) -> go.Figure:
+    """Horizontal stacked bar chart showing weighted dimension contributions.
+
+    *chain_scores*: list of ChainQRScore objects.
+    """
+    chain_colors = {
+        "Solana": "#1f77b4",
+        "Bitcoin": "#ff7f0e",
+        "Ethereum": "#2ca02c",
+    }
+    dim_colors = {
+        "throughput_retention": "#636efa",
+        "signature_size": "#ef553b",
+        "migration_feasibility": "#00cc96",
+        "zk_readiness": "#ab63fa",
+        "algorithm_diversity": "#ffa15a",
+    }
+
+    data = []
+    for cs in chain_scores:
+        for d in cs.dimensions:
+            data.append({
+                "Chain": cs.chain,
+                "Dimension": d.dimension.replace("_", " ").title(),
+                "Weighted Score": d.weighted_score,
+                "Raw Score": d.score,
+                "Weight": f"{d.weight:.0%}",
+            })
+
+    df = pd.DataFrame(data)
+    fig = px.bar(
+        df,
+        y="Chain",
+        x="Weighted Score",
+        color="Dimension",
+        orientation="h",
+        title="Composite QR Score Breakdown (Weighted Contributions)",
+        text="Weighted Score",
+        color_discrete_map={
+            "Throughput Retention": dim_colors["throughput_retention"],
+            "Signature Size": dim_colors["signature_size"],
+            "Migration Feasibility": dim_colors["migration_feasibility"],
+            "Zk Readiness": dim_colors["zk_readiness"],
+            "Algorithm Diversity": dim_colors["algorithm_diversity"],
+        },
+    )
+    fig.update_traces(texttemplate="%{text:.1f}", textposition="inside")
+    fig.update_layout(
+        barmode="stack",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12),
+        title_font_size=16,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_title="Weighted Score (0-100)",
+    )
+    return fig
+
+
 def zk_gas_breakdown_chart(analyses: List[ZKProofAnalysis]) -> go.Figure:
     """Stacked bar showing gas breakdown: base + calldata + verification."""
     data = []

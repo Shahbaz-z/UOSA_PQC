@@ -1,10 +1,11 @@
 """Blockchain Quantum Resistance Educator -- Streamlit Application.
 
-Four tabs:
+Five tabs:
 1. Block-Space Visualizer -- Solana, Bitcoin & Ethereum throughput impact analysis
 2. Side-by-Side Comparison -- Compare multiple signature algorithms at once
 3. Cross-Chain Summary -- Compare PQC impact across all three blockchains
 4. ZK-STARKs Analysis -- Zero-knowledge proof systems and quantum resistance
+5. QR Score -- Composite quantum resistance readiness scoring per chain
 """
 
 from __future__ import annotations
@@ -39,6 +40,10 @@ from blockchain.zk_models import (
     ETH_BLOCK_GAS_LIMIT_DEFAULT, ETH_BLOCK_TIME_MS_DEFAULT,
     ECDSA_TX_GAS,
 )
+from blockchain.qr_score import (
+    score_all_chains, score_chain,
+    SCORE_WEIGHTS, MIGRATION_FEASIBILITY, ZK_READINESS,
+)
 from app.components.charts import (
     block_space_chart,
     throughput_comparison_chart,
@@ -48,6 +53,8 @@ from app.components.charts import (
     zk_throughput_comparison_chart,
     zk_vs_signatures_chart,
     zk_gas_breakdown_chart,
+    qr_radar_chart,
+    qr_composite_bar_chart,
 )
 
 # ---------------------------------------------------------------------------
@@ -271,7 +278,8 @@ with st.sidebar:
         "1. **Block-Space** -- Per-chain impact analysis\n"
         "2. **Compare** -- Side-by-side algorithm comparison\n"
         "3. **Cross-Chain** -- Summary across all blockchains\n"
-        "4. **ZK Proofs** -- Zero-knowledge proof analysis"
+        "4. **ZK Proofs** -- Zero-knowledge proof analysis\n"
+        "5. **QR Score** -- Quantum resistance readiness grades"
     )
 
 # ---------------------------------------------------------------------------
@@ -286,11 +294,12 @@ st.caption(
 # ---------------------------------------------------------------------------
 # Tab layout
 # ---------------------------------------------------------------------------
-tab_block, tab_compare, tab_crosschain, tab_zk = st.tabs([
+tab_block, tab_compare, tab_crosschain, tab_zk, tab_qr = st.tabs([
     "📊 Block-Space Visualizer",
     "⚖️ Side-by-Side Comparison",
     "🌐 Cross-Chain Summary",
     "🔐 ZK Proof Analysis",
+    "🎯 QR Score",
 ])
 
 # ===== TAB 1: Block-Space Visualizer =======================================
@@ -1200,4 +1209,156 @@ with tab_zk:
         "zk_proof_analysis.csv",
         "text/csv",
         key="dl_zk",
+    )
+
+# ===== TAB 5: QR Score =====================================================
+with tab_qr:
+    st.header("Quantum Resistance Readiness Score")
+    st.caption(
+        "A composite scoring model that evaluates each blockchain's readiness "
+        "for the post-quantum transition across five weighted dimensions."
+    )
+
+    # Educational context
+    with st.expander("How the QR Score Works", expanded=True):
+        st.markdown(
+            "The QR Score evaluates quantum resistance readiness across "
+            "**five dimensions**, each weighted by importance:\n\n"
+            "| Dimension | Weight | What It Measures |\n"
+            "|-----------|--------|------------------|\n"
+            "| Throughput Retention | 30% | Best PQC algorithm's throughput vs baseline |\n"
+            "| Signature Size | 20% | How much PQC signatures inflate vs classical |\n"
+            "| Migration Feasibility | 25% | Practical difficulty of PQC adoption |\n"
+            "| ZK Readiness | 15% | Chain's ability to leverage quantum-resistant ZK proofs |\n"
+            "| Algorithm Diversity | 10% | Number of viable PQC algorithm families |\n\n"
+            "Each dimension is scored 0-100, then weighted to produce a composite score "
+            "and letter grade (A-F)."
+        )
+
+    st.divider()
+
+    # Compute scores
+    qr_scores = score_all_chains()
+
+    # Grade cards
+    st.subheader("Overall Grades")
+    gc1, gc2, gc3 = st.columns(3)
+
+    grade_colors = {
+        "A": "green", "B": "green", "C": "orange", "D": "red", "F": "red",
+    }
+
+    for col, cs in zip([gc1, gc2, gc3], qr_scores):
+        with col:
+            grade_color = grade_colors.get(cs.grade, "gray")
+            st.markdown(f"### {cs.chain}")
+            st.markdown(f"## :{grade_color}[{cs.grade}]")
+            st.metric(
+                "Composite Score",
+                f"{cs.composite_score:.1f} / 100",
+            )
+            st.caption(f"Best PQC: **{cs.best_pqc_algorithm}** ({cs.best_pqc_retention:.1%} retention)")
+
+    st.divider()
+
+    # Radar chart
+    st.subheader("Dimension Comparison")
+    st.plotly_chart(qr_radar_chart(qr_scores), use_container_width=True)
+
+    # Composite bar chart
+    st.plotly_chart(qr_composite_bar_chart(qr_scores), use_container_width=True)
+
+    # Detailed dimension breakdown per chain
+    st.divider()
+    st.subheader("Detailed Dimension Breakdown")
+
+    for cs in qr_scores:
+        with st.expander(f"{cs.chain} -- {cs.composite_score:.1f}/100 (Grade: {cs.grade})", expanded=False):
+            dim_rows = []
+            for d in cs.dimensions:
+                dim_rows.append({
+                    "Dimension": d.dimension.replace("_", " ").title(),
+                    "Raw Score": f"{d.score:.1f}",
+                    "Weight": f"{d.weight:.0%}",
+                    "Weighted": f"{d.weighted_score:.1f}",
+                    "Detail": d.detail,
+                })
+            st.dataframe(pd.DataFrame(dim_rows), use_container_width=True, hide_index=True)
+
+            st.markdown(f"**Recommendation:** {cs.recommendation}")
+
+    # Migration feasibility details
+    st.divider()
+    st.subheader("Migration Feasibility Analysis")
+
+    mf1, mf2, mf3 = st.columns(3)
+    for col, chain_name in zip([mf1, mf2, mf3], ["Solana", "Bitcoin", "Ethereum"]):
+        info = MIGRATION_FEASIBILITY[chain_name]
+        with col:
+            st.markdown(f"### {chain_name}")
+            st.metric("Feasibility Score", f"{info['score']:.0f}/100")
+            st.markdown(f"**Hard Fork Required:** {'Yes' if info['hard_fork_required'] else 'No'}")
+            st.markdown(f"**Account Model:** {info['account_model']}")
+            st.caption(info["rationale"])
+
+    # ZK readiness details
+    st.divider()
+    st.subheader("ZK-STARK Readiness")
+
+    zr1, zr2, zr3 = st.columns(3)
+    for col, chain_name in zip([zr1, zr2, zr3], ["Solana", "Bitcoin", "Ethereum"]):
+        info = ZK_READINESS[chain_name]
+        with col:
+            st.markdown(f"### {chain_name}")
+            st.metric("ZK Readiness Score", f"{info['score']:.0f}/100")
+            st.caption(info["rationale"])
+
+    # Scoring weights explanation
+    st.divider()
+    with st.expander("Scoring Model Assumptions & Limitations"):
+        st.markdown(
+            "**Scoring Weights:**\n"
+            + "\n".join(f"- {k.replace('_', ' ').title()}: {v:.0%}" for k, v in SCORE_WEIGHTS.items())
+            + "\n\n"
+            "**What this model captures:**\n"
+            "- Throughput impact of the best PQC signature scheme per chain\n"
+            "- Signature size inflation relative to classical schemes\n"
+            "- Qualitative migration feasibility (governance, account model, timing)\n"
+            "- ZK-STARK infrastructure readiness per chain\n"
+            "- Diversity of viable PQC algorithm families (>10% throughput retention)\n\n"
+            "**What this model does NOT capture:**\n"
+            "- Ecosystem readiness (wallet support, tooling, developer adoption)\n"
+            "- Governance velocity (how fast a chain can coordinate upgrades)\n"
+            "- Economic incentives for migration\n"
+            "- Specific timeline projections for quantum computer capabilities\n"
+            "- Hybrid classical+PQC transition schemes\n\n"
+            "**Note:** Migration feasibility and ZK readiness scores are "
+            "qualitative assessments encoded as numeric values. They reflect "
+            "expert judgment rather than empirical measurements."
+        )
+
+    # Download
+    st.divider()
+    qr_dl_rows = []
+    for cs in qr_scores:
+        for d in cs.dimensions:
+            qr_dl_rows.append({
+                "Chain": cs.chain,
+                "Composite Score": cs.composite_score,
+                "Grade": cs.grade,
+                "Dimension": d.dimension,
+                "Raw Score": d.score,
+                "Weight": d.weight,
+                "Weighted Score": d.weighted_score,
+                "Detail": d.detail,
+                "Best PQC": cs.best_pqc_algorithm,
+                "Best PQC Retention": cs.best_pqc_retention,
+                "Recommendation": cs.recommendation,
+            })
+    st.download_button(
+        "Download QR Scores CSV",
+        pd.DataFrame(qr_dl_rows).to_csv(index=False),
+        "qr_scores.csv",
+        "text/csv",
+        key="dl_qr",
     )
