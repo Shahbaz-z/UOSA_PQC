@@ -8,10 +8,12 @@ Assumptions and limitations (document in report):
   transaction serialization.
 - Base transaction overhead is approximated as a constant.
 - Solana practical block size is ~6 MB (theoretical 32 MB).
-  Note: ~50% of real block space is consumed by validator vote
-  transactions; this model assumes all space is user-available.
+  Configurable vote_tx_pct parameter models validator vote overhead
+  (typically 70-80% of real block space).
 - Bitcoin block weight limit is 4 MWU; SegWit witness discount applies.
-- Ethereum uses gas-based cost model with 30M gas block limit.
+  Supports both ECDSA and Schnorr (BIP 340 Taproot) baselines.
+- Ethereum uses gas-based cost model. Configurable gas limit supports
+  2024 baseline (30M) through 2026 target (180M).
 
 Sources:
 - Solana docs: https://docs.solana.com/developing/programming-model/transactions
@@ -32,14 +34,17 @@ SIGNATURE_SIZES: Dict[str, int] = {
     # Classical baselines (not quantum-resistant)
     "Ed25519": 64,
     "ECDSA": 72,  # DER-encoded secp256k1 (Bitcoin/Ethereum baseline)
+    "Schnorr": 64,  # BIP 340 (Bitcoin Taproot) - fixed size
     # FIPS 204 -- ML-DSA
     "ML-DSA-44": 2_420,
     "ML-DSA-65": 3_293,
     "ML-DSA-87": 4_595,
-    # FIPS 205 -- SLH-DSA (SPHINCS+)
+    # FIPS 205 -- SLH-DSA (SPHINCS+) - all 6 parameter sets
     "SLH-DSA-128s": 7_856,
     "SLH-DSA-128f": 17_088,
     "SLH-DSA-192s": 16_224,
+    "SLH-DSA-192f": 35_664,
+    "SLH-DSA-256s": 29_792,
     "SLH-DSA-256f": 49_856,
     # Falcon (pending FIPS as FN-DSA)
     "Falcon-512": 666,
@@ -55,12 +60,15 @@ SIGNATURE_SIZES: Dict[str, int] = {
 PUBLIC_KEY_SIZES: Dict[str, int] = {
     "Ed25519": 32,
     "ECDSA": 33,  # compressed secp256k1
+    "Schnorr": 32,  # BIP 340 x-only pubkey
     "ML-DSA-44": 1_312,
     "ML-DSA-65": 1_952,
     "ML-DSA-87": 2_592,
     "SLH-DSA-128s": 32,
     "SLH-DSA-128f": 32,
     "SLH-DSA-192s": 48,
+    "SLH-DSA-192f": 48,
+    "SLH-DSA-256s": 64,
     "SLH-DSA-256f": 64,
     "Falcon-512": 897,
     "Falcon-1024": 1_793,
@@ -72,9 +80,9 @@ PUBLIC_KEY_SIZES: Dict[str, int] = {
 }
 
 # Subsets for each chain (Solana uses Ed25519 baseline, Bitcoin/Ethereum use ECDSA)
-SOLANA_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "ECDSA"]
+SOLANA_SIG_TYPES = [k for k in SIGNATURE_SIZES if k not in ("ECDSA", "Schnorr")]
 BITCOIN_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "Ed25519"]
-ETHEREUM_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "Ed25519"]
+ETHEREUM_SIG_TYPES = [k for k in SIGNATURE_SIZES if k not in ("Ed25519", "Schnorr")]
 
 # ---------------------------------------------------------------------------
 # Solana parameters
@@ -82,6 +90,11 @@ ETHEREUM_SIG_TYPES = [k for k in SIGNATURE_SIZES if k != "Ed25519"]
 SOLANA_BLOCK_SIZE_BYTES = 6_000_000  # ~6 MB practical limit
 SOLANA_SLOT_TIME_MS = 400  # target slot time
 SOLANA_BASE_TX_OVERHEAD = 250  # accounts, instructions, blockhash
+
+# Vote transaction overhead: 70-80% of Solana blocks are validator votes
+# Source: https://docs.solana.com/consensus/tower-bft
+SOLANA_VOTE_TX_PCT_DEFAULT = 0.0  # backwards-compatible default (no overhead)
+SOLANA_VOTE_TX_PCT_REALISTIC = 0.70  # ~70% of block space is votes
 
 # ---------------------------------------------------------------------------
 # Bitcoin parameters
@@ -94,11 +107,21 @@ BITCOIN_WITNESS_DISCOUNT = 4  # witness bytes count as 1/4 weight
 # ---------------------------------------------------------------------------
 # Ethereum parameters
 # ---------------------------------------------------------------------------
-ETHEREUM_BLOCK_GAS_LIMIT = 30_000_000  # 30M gas
+ETHEREUM_BLOCK_GAS_LIMIT = 30_000_000  # 30M gas (2024 baseline)
 ETHEREUM_BLOCK_TIME_MS = 12_000  # 12 seconds (post-Merge)
 ETHEREUM_BASE_TX_GAS = 21_000  # intrinsic gas cost per transaction
 ETHEREUM_CALLDATA_GAS_PER_BYTE = 16  # non-zero calldata byte cost
 ETHEREUM_BASE_TX_OVERHEAD = 120  # non-signature calldata (to, value, nonce etc.)
+
+# Ethereum gas limit presets (2024-2026 planned increases)
+# Source: Ethereum core dev discussions, EIP-4844 follow-ups
+ETHEREUM_GAS_LIMITS: Dict[str, int] = {
+    "2024_baseline": 30_000_000,
+    "2025_current": 36_000_000,
+    "2026_q1": 60_000_000,
+    "2026_q2": 80_000_000,
+    "2026_target": 180_000_000,
+}
 
 # ---------------------------------------------------------------------------
 # Multi-signature transaction types
@@ -155,22 +178,33 @@ def analyze_solana_block_space(
     base_tx_overhead: int = SOLANA_BASE_TX_OVERHEAD,
     slot_time_ms: int = SOLANA_SLOT_TIME_MS,
     num_signers: int = 1,
+    vote_tx_pct: float = SOLANA_VOTE_TX_PCT_DEFAULT,
 ) -> BlockAnalysis:
-    """Calculate how many transactions fit in a Solana block."""
+    """Calculate how many transactions fit in a Solana block.
+
+    Args:
+        vote_tx_pct: Fraction of block space consumed by validator vote
+            transactions. Default 0.0 for backwards compatibility.
+            Use 0.70 for realistic estimates (70% vote transactions).
+    """
     if signature_type not in SIGNATURE_SIZES:
         raise ValueError(
             f"Unknown signature type: {signature_type}. "
             f"Valid types: {list(SIGNATURE_SIZES.keys())}"
         )
+
+    # Calculate available block space after vote transaction overhead
+    available_block_space = int(block_size * (1.0 - vote_tx_pct))
+
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
     tx_size = base_tx_overhead + sig_size
-    txs_per_block = block_size // tx_size
+    txs_per_block = available_block_space // tx_size
     tps = txs_per_block / (slot_time_ms / 1000)
 
-    # Baseline: Ed25519
+    # Baseline: Ed25519 (with same vote overhead)
     ed_tx_size = base_tx_overhead + SIGNATURE_SIZES["Ed25519"] * num_signers
-    ed_txs = block_size // ed_tx_size
+    ed_txs = available_block_space // ed_tx_size
 
     return BlockAnalysis(
         signature_type=signature_type,
@@ -178,7 +212,7 @@ def analyze_solana_block_space(
         public_key_bytes=pk_size,
         tx_size_bytes=tx_size,
         txs_per_block=txs_per_block,
-        block_utilization_pct=round((txs_per_block * tx_size / block_size) * 100, 2),
+        block_utilization_pct=round((txs_per_block * tx_size / available_block_space) * 100, 2) if available_block_space > 0 else 0,
         signature_overhead_pct=round((sig_size / tx_size) * 100, 2),
         throughput_tps=round(tps, 1),
         relative_to_baseline=round(txs_per_block / ed_txs, 4) if ed_txs > 0 else 0,
@@ -190,10 +224,11 @@ def compare_all_solana(
     base_tx_overhead: int = SOLANA_BASE_TX_OVERHEAD,
     slot_time_ms: int = SOLANA_SLOT_TIME_MS,
     num_signers: int = 1,
+    vote_tx_pct: float = SOLANA_VOTE_TX_PCT_DEFAULT,
 ) -> ComparativeAnalysis:
     """Run Solana block-space analysis for every signature scheme."""
     analyses = [
-        analyze_solana_block_space(sig, block_size, base_tx_overhead, slot_time_ms, num_signers)
+        analyze_solana_block_space(sig, block_size, base_tx_overhead, slot_time_ms, num_signers, vote_tx_pct)
         for sig in SOLANA_SIG_TYPES
     ]
     baseline = next(a for a in analyses if a.signature_type == "Ed25519")

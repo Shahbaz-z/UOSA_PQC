@@ -103,6 +103,16 @@ SIG_PARAMS = {
         "secret_key": 96,
         "signature": 16224,
     },
+    "SLH-DSA-192f": {
+        "public_key": 48,
+        "secret_key": 96,
+        "signature": 35664,
+    },
+    "SLH-DSA-256s": {
+        "public_key": 64,
+        "secret_key": 128,
+        "signature": 29792,
+    },
     "SLH-DSA-256f": {
         "public_key": 64,
         "secret_key": 128,
@@ -130,7 +140,14 @@ ED25519_PARAMS = {
 # ECDSA (secp256k1) -- Bitcoin/Ethereum classical baseline
 ECDSA_PARAMS = {
     "public_key": 33,  # compressed
-    "signature": 72,   # DER-encoded
+    "signature": 72,   # DER-encoded (average, varies 71-73)
+}
+
+# Schnorr (BIP 340) -- Bitcoin Taproot
+# Fixed-size signatures (no DER encoding), x-only public keys
+SCHNORR_PARAMS = {
+    "public_key": 32,  # x-only (no sign byte)
+    "signature": 64,   # fixed r || s
 }
 
 # Algorithms that support hybrid mode (Ed25519 + PQC)
@@ -144,7 +161,11 @@ HYBRIDABLE_SIGS = [
 
 # Subsets for categorization
 FIPS_204_ALGOS = ["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"]
-FIPS_205_ALGOS = ["SLH-DSA-128s", "SLH-DSA-128f", "SLH-DSA-192s", "SLH-DSA-256f"]
+FIPS_205_ALGOS = [
+    "SLH-DSA-128s", "SLH-DSA-128f",
+    "SLH-DSA-192s", "SLH-DSA-192f",
+    "SLH-DSA-256s", "SLH-DSA-256f",
+]
 FALCON_ALGOS = ["Falcon-512", "Falcon-1024"]
 
 

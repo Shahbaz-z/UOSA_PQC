@@ -2,7 +2,7 @@
 
 Supports NIST-standardized algorithms:
   - ML-DSA-44/65/87  (FIPS 204, lattice-based, formerly "Dilithium")
-  - SLH-DSA-128s/128f/192s/256f  (FIPS 205, hash-based, formerly "SPHINCS+")
+  - SLH-DSA-128s/128f/192s/192f/256s/256f  (FIPS 205, all 6 parameter sets)
   - Falcon-512/1024  (pending FIPS as FN-DSA, lattice/NTRU-based)
   - Ed25519 via PyNaCl (classical, not quantum-resistant)
 

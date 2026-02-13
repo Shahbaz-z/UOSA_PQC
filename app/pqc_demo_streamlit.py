@@ -26,9 +26,10 @@ from blockchain.solana_model import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
     SIGNATURE_SIZES,
     SOLANA_BLOCK_SIZE_BYTES, SOLANA_BASE_TX_OVERHEAD, SOLANA_SLOT_TIME_MS,
+    SOLANA_VOTE_TX_PCT_DEFAULT, SOLANA_VOTE_TX_PCT_REALISTIC,
     BITCOIN_BLOCK_WEIGHT_LIMIT, BITCOIN_BASE_TX_OVERHEAD, BITCOIN_BLOCK_TIME_MS,
     ETHEREUM_BLOCK_GAS_LIMIT, ETHEREUM_BASE_TX_OVERHEAD, ETHEREUM_BLOCK_TIME_MS,
-    ETHEREUM_BASE_TX_GAS, ETHEREUM_CALLDATA_GAS_PER_BYTE,
+    ETHEREUM_BASE_TX_GAS, ETHEREUM_CALLDATA_GAS_PER_BYTE, ETHEREUM_GAS_LIMITS,
 )
 from app.components.charts import (
     block_space_chart,
@@ -45,12 +46,16 @@ ALGO_INFO = {
     "ML-KEM-768": ("FIPS 203 Level 3 (AES-192 equivalent)", "KEM", "Lattice (MLWE)"),
     "ML-KEM-1024": ("FIPS 203 Level 5 (AES-256 equivalent)", "KEM", "Lattice (MLWE)"),
     "Ed25519": ("Classical elliptic-curve signature (not PQC)", "Signature", "Elliptic Curve"),
+    "ECDSA": ("Classical secp256k1 (Bitcoin/Ethereum, not PQC)", "Signature", "Elliptic Curve"),
+    "Schnorr": ("BIP 340 Taproot (Bitcoin, not PQC)", "Signature", "Elliptic Curve"),
     "ML-DSA-44": ("FIPS 204 Level 2", "Signature", "Lattice (MLWE)"),
     "ML-DSA-65": ("FIPS 204 Level 3 (recommended)", "Signature", "Lattice (MLWE)"),
     "ML-DSA-87": ("FIPS 204 Level 5", "Signature", "Lattice (MLWE)"),
     "SLH-DSA-128s": ("FIPS 205 Level 1 -- small/slow hash-based", "Signature", "Hash-based"),
     "SLH-DSA-128f": ("FIPS 205 Level 1 -- fast/large hash-based", "Signature", "Hash-based"),
     "SLH-DSA-192s": ("FIPS 205 Level 3 -- small/slow hash-based", "Signature", "Hash-based"),
+    "SLH-DSA-192f": ("FIPS 205 Level 3 -- fast/large hash-based", "Signature", "Hash-based"),
+    "SLH-DSA-256s": ("FIPS 205 Level 5 -- small/slow hash-based", "Signature", "Hash-based"),
     "SLH-DSA-256f": ("FIPS 205 Level 5 -- fast/large hash-based", "Signature", "Hash-based"),
     "Falcon-512": ("Level 1 -- pending FIPS as FN-DSA, compact sigs", "Signature", "Lattice (NTRU)"),
     "Falcon-1024": ("Level 5 -- pending FIPS as FN-DSA, compact sigs", "Signature", "Lattice (NTRU)"),
@@ -196,40 +201,60 @@ with tab_block:
                 "This model calculates how many transactions fit per block when "
                 "the signature scheme changes. Larger PQC signatures mean fewer "
                 "transactions per block and lower throughput.\n\n"
-                "**Limitation:** Models signature contribution to transaction "
-                "size only. Real transactions include additional program data. "
-                "Also does not account for validator vote transactions (~50% of block space)."
+                "**Vote Transaction Overhead:** In reality, 70-80% of Solana block space "
+                "is consumed by validator vote transactions. Use the vote overhead slider "
+                "to model realistic vs theoretical capacity."
             )
 
         # Presets
         st.markdown("##### Quick Presets")
-        pc1, pc2, pc3 = st.columns(3)
+        pc1, pc2, pc3, pc4 = st.columns(4)
         with pc1:
-            if st.button("Default Solana", key="sol_default", use_container_width=True,
-                         help="6 MB block, 250 B overhead, 400 ms slot"):
+            if st.button("Theoretical Max", key="sol_theoretical", use_container_width=True,
+                         help="100% for user txs (no vote overhead)"):
                 st.session_state["sol_block_size"] = SOLANA_BLOCK_SIZE_BYTES
                 st.session_state["sol_base_overhead"] = SOLANA_BASE_TX_OVERHEAD
                 st.session_state["sol_slot_time"] = SOLANA_SLOT_TIME_MS
+                st.session_state["sol_vote_pct"] = 0
                 st.rerun()
         with pc2:
+            if st.button("Realistic (70%)", key="sol_realistic", use_container_width=True,
+                         help="70% vote overhead (30% for user txs)"):
+                st.session_state["sol_block_size"] = SOLANA_BLOCK_SIZE_BYTES
+                st.session_state["sol_base_overhead"] = SOLANA_BASE_TX_OVERHEAD
+                st.session_state["sol_slot_time"] = SOLANA_SLOT_TIME_MS
+                st.session_state["sol_vote_pct"] = 70
+                st.rerun()
+        with pc3:
+            if st.button("High Activity", key="sol_high_activity", use_container_width=True,
+                         help="80% vote overhead (20% for user txs)"):
+                st.session_state["sol_block_size"] = SOLANA_BLOCK_SIZE_BYTES
+                st.session_state["sol_base_overhead"] = SOLANA_BASE_TX_OVERHEAD
+                st.session_state["sol_slot_time"] = SOLANA_SLOT_TIME_MS
+                st.session_state["sol_vote_pct"] = 80
+                st.rerun()
+        with pc4:
             if st.button("High Throughput", key="sol_high", use_container_width=True,
-                         help="12 MB block, 200 B overhead, 400 ms slot"):
+                         help="12 MB block, no vote overhead"):
                 st.session_state["sol_block_size"] = 12_000_000
                 st.session_state["sol_base_overhead"] = 200
                 st.session_state["sol_slot_time"] = SOLANA_SLOT_TIME_MS
-                st.rerun()
-        with pc3:
-            if st.button("Constrained", key="sol_constrained", use_container_width=True,
-                         help="3 MB block, 350 B overhead, 600 ms slot"):
-                st.session_state["sol_block_size"] = 3_000_000
-                st.session_state["sol_base_overhead"] = 350
-                st.session_state["sol_slot_time"] = 600
+                st.session_state["sol_vote_pct"] = 0
                 st.rerun()
 
         col_params, col_results = st.columns([1, 2])
 
         with col_params:
             st.markdown("##### Model Parameters")
+            vote_pct = st.slider(
+                "Vote transaction overhead (%)",
+                min_value=0,
+                max_value=85,
+                value=st.session_state.get("sol_vote_pct", 0),
+                step=5,
+                key="sol_vote_pct",
+                help="70-80% of Solana blocks are validator votes. Set to 0 for theoretical max.",
+            )
             block_size = st.number_input(
                 "Block size (bytes)",
                 value=st.session_state.get("sol_block_size", SOLANA_BLOCK_SIZE_BYTES),
@@ -257,8 +282,10 @@ with tab_block:
                 key="sol_slot_time",
                 help="Target time per slot (400 ms default)",
             )
+            if vote_pct > 0:
+                st.caption(f"Available for user txs: {100 - vote_pct}% ({int(block_size * (100 - vote_pct) / 100):,} bytes)")
 
-        comp = compare_all_solana(block_size, base_overhead, slot_time, num_signers=num_signers)
+        comp = compare_all_solana(block_size, base_overhead, slot_time, num_signers=num_signers, vote_tx_pct=vote_pct / 100)
 
     elif chain == "Bitcoin":
         with st.expander("About the Bitcoin model"):
@@ -339,33 +366,46 @@ with tab_block:
                 "rather than bytes. Each transaction pays:\n"
                 "- **21,000 gas** base intrinsic cost\n"
                 "- **16 gas per non-zero byte** of calldata (signature + public key)\n\n"
-                "The block gas limit is **30M gas** with **12-second** block times (post-Merge).\n\n"
-                "PQC signatures increase calldata size, consuming more gas per transaction "
-                "and reducing the number of transactions per block."
+                "**2026 Gas Limit Increases:** Ethereum is increasing block gas limits from "
+                "30M (2024) to potentially 180M by late 2026. Use presets to model future capacity."
             )
 
         # Presets
-        st.markdown("##### Quick Presets")
-        pc1, pc2, pc3 = st.columns(3)
+        st.markdown("##### Gas Limit Presets (2024-2026)")
+        pc1, pc2, pc3, pc4, pc5 = st.columns(5)
         with pc1:
-            if st.button("Default Ethereum", key="eth_default", use_container_width=True,
-                         help="30M gas, 120 B overhead, 12s blocks"):
-                st.session_state["eth_gas_limit"] = ETHEREUM_BLOCK_GAS_LIMIT
+            if st.button("30M (2024)", key="eth_2024", use_container_width=True,
+                         help="2024 baseline: 30M gas"):
+                st.session_state["eth_gas_limit"] = ETHEREUM_GAS_LIMITS["2024_baseline"]
                 st.session_state["eth_base_overhead"] = ETHEREUM_BASE_TX_OVERHEAD
                 st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
                 st.rerun()
         with pc2:
-            if st.button("Higher Gas Limit", key="eth_high", use_container_width=True,
-                         help="60M gas, 120 B overhead, 12s blocks"):
-                st.session_state["eth_gas_limit"] = 60_000_000
-                st.session_state["eth_base_overhead"] = 120
+            if st.button("36M (2025)", key="eth_2025", use_container_width=True,
+                         help="2025 current: 36M gas"):
+                st.session_state["eth_gas_limit"] = ETHEREUM_GAS_LIMITS["2025_current"]
+                st.session_state["eth_base_overhead"] = ETHEREUM_BASE_TX_OVERHEAD
                 st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
                 st.rerun()
         with pc3:
-            if st.button("Constrained Gas", key="eth_constrained", use_container_width=True,
-                         help="15M gas, 120 B overhead, 12s blocks"):
-                st.session_state["eth_gas_limit"] = 15_000_000
-                st.session_state["eth_base_overhead"] = 120
+            if st.button("60M (Q1 2026)", key="eth_2026_q1", use_container_width=True,
+                         help="2026 Q1 target: 60M gas"):
+                st.session_state["eth_gas_limit"] = ETHEREUM_GAS_LIMITS["2026_q1"]
+                st.session_state["eth_base_overhead"] = ETHEREUM_BASE_TX_OVERHEAD
+                st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
+                st.rerun()
+        with pc4:
+            if st.button("80M (Q2 2026)", key="eth_2026_q2", use_container_width=True,
+                         help="2026 Q2 target: 80M gas"):
+                st.session_state["eth_gas_limit"] = ETHEREUM_GAS_LIMITS["2026_q2"]
+                st.session_state["eth_base_overhead"] = ETHEREUM_BASE_TX_OVERHEAD
+                st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
+                st.rerun()
+        with pc5:
+            if st.button("180M (Target)", key="eth_target", use_container_width=True,
+                         help="2026 target: 180M gas"):
+                st.session_state["eth_gas_limit"] = ETHEREUM_GAS_LIMITS["2026_target"]
+                st.session_state["eth_base_overhead"] = ETHEREUM_BASE_TX_OVERHEAD
                 st.session_state["eth_block_time"] = ETHEREUM_BLOCK_TIME_MS
                 st.rerun()
 
@@ -377,10 +417,10 @@ with tab_block:
                 "Block gas limit",
                 value=st.session_state.get("eth_gas_limit", ETHEREUM_BLOCK_GAS_LIMIT),
                 min_value=1_000_000,
-                max_value=100_000_000,
+                max_value=200_000_000,
                 step=5_000_000,
                 key="eth_gas_limit",
-                help="Ethereum block gas limit (30,000,000 default)",
+                help="Ethereum block gas limit (30M baseline, up to 180M by 2026)",
             )
             eth_base_overhead = st.number_input(
                 "Base tx overhead (bytes)",
