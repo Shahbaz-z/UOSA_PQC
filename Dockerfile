@@ -28,14 +28,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Streamlit config
+# Reflex config
+ENV REFLEX_FRONTEND_PORT=3000
+ENV REFLEX_BACKEND_PORT=8000
+
+# Streamlit config (legacy, kept for reference)
 ENV STREAMLIT_SERVER_PORT=8501
 ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
-EXPOSE 8501
+# Expose both Reflex ports and legacy Streamlit port
+EXPOSE 3000 8000 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+    CMD curl -f http://localhost:3000 || exit 1
 
-CMD ["streamlit", "run", "app/pqc_demo_streamlit.py"]
+# Default: Run Reflex app
+# To run Streamlit instead: docker run ... streamlit run app/pqc_demo_streamlit.py
+CMD ["reflex", "run", "--env", "prod"]
