@@ -1,10 +1,9 @@
-"""PQC Demo -- Streamlit Application.
+"""Blockchain Quantum Resistance Educator -- Streamlit Application.
 
-Four tabs:
-1. KEM Demo -- ML-KEM (FIPS 203) key encapsulation interactive walkthrough
-2. Signature Demo -- ML-DSA / SLH-DSA / Falcon / Ed25519 / Hybrid signing
-3. Block-Space Visualizer -- Solana, Bitcoin & Ethereum throughput impact analysis
-4. Side-by-Side Comparison -- Compare multiple algorithms at once
+Three tabs:
+1. Block-Space Visualizer -- Solana, Bitcoin & Ethereum throughput impact analysis
+2. Side-by-Side Comparison -- Compare multiple signature algorithms at once
+3. (Future) ZK-STARKs Analysis -- Zero-knowledge proof impact modeling
 """
 
 from __future__ import annotations
@@ -21,10 +20,8 @@ if _project_root not in sys.path:
 import streamlit as st
 import pandas as pd
 
-from pqc_lib.mock import MOCK_MODE, SIG_PARAMS, ED25519_PARAMS
-from pqc_lib.kem import keygen as kem_keygen, encaps, decaps, KEM_ALGORITHMS
+from pqc_lib.mock import MOCK_MODE, ED25519_PARAMS
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
-from benchmarks.bench import bench_kem, bench_sig
 from blockchain.solana_model import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
     SIGNATURE_SIZES,
@@ -34,7 +31,6 @@ from blockchain.solana_model import (
     ETHEREUM_BASE_TX_GAS, ETHEREUM_CALLDATA_GAS_PER_BYTE,
 )
 from app.components.charts import (
-    benchmark_bar_chart,
     block_space_chart,
     throughput_comparison_chart,
     signature_size_comparison,
@@ -83,8 +79,8 @@ def _format_bytes(n: int) -> str:
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Post-Quantum Cryptography Demo",
-    page_icon="🔐",
+    page_title="Blockchain Quantum Resistance Educator",
+    page_icon="⛓️",
     layout="wide",
 )
 
@@ -92,7 +88,7 @@ st.set_page_config(
 # Sidebar -- global info and quick reference
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🔐 PQC Demo")
+    st.title("⛓️ Blockchain QR Educator")
 
     if MOCK_MODE:
         st.warning(
@@ -144,377 +140,28 @@ with st.sidebar:
     st.divider()
     st.caption("NAVIGATION")
     st.markdown(
-        "1. **KEM Demo** -- Key exchange walkthrough\n"
-        "2. **Signatures** -- Sign & verify walkthrough\n"
-        "3. **Block-Space** -- Solana, Bitcoin & Ethereum impact\n"
-        "4. **Compare** -- Side-by-side algorithm comparison"
+        "1. **Block-Space** -- Solana, Bitcoin & Ethereum impact\n"
+        "2. **Compare** -- Side-by-side algorithm comparison"
     )
 
 # ---------------------------------------------------------------------------
 # Main title
 # ---------------------------------------------------------------------------
-st.title("Post-Quantum Cryptography Demo")
+st.title("Blockchain Quantum Resistance Educator")
 st.caption(
-    "An interactive educational tool for exploring NIST post-quantum cryptography standards "
-    "and their impact on blockchain systems."
+    "An interactive educational tool for exploring how post-quantum cryptography "
+    "affects blockchain transaction throughput on Solana, Bitcoin, and Ethereum."
 )
 
 # ---------------------------------------------------------------------------
 # Tab layout
 # ---------------------------------------------------------------------------
-tab_kem, tab_sig, tab_block, tab_compare = st.tabs([
-    "🔑 KEM Demo",
-    "✍️ Signature Demo",
+tab_block, tab_compare = st.tabs([
     "📊 Block-Space Visualizer",
     "⚖️ Side-by-Side Comparison",
 ])
 
-# ===== TAB 1: KEM Demo ====================================================
-with tab_kem:
-    st.header("Key Encapsulation Mechanism (ML-KEM, FIPS 203)")
-
-    with st.expander("What is a KEM?", expanded=False):
-        st.markdown(
-            "A **Key Encapsulation Mechanism (KEM)** allows two parties to establish "
-            "a shared secret over an insecure channel. Unlike traditional key exchange "
-            "(e.g., Diffie-Hellman), a KEM works in three steps:\n\n"
-            "1. **Key Generation** -- Alice generates a public/secret keypair\n"
-            "2. **Encapsulation** -- Bob uses Alice's public key to create a shared "
-            "secret and a ciphertext\n"
-            "3. **Decapsulation** -- Alice uses her secret key and the ciphertext to "
-            "recover the same shared secret\n\n"
-            "**ML-KEM** (FIPS 203) is a lattice-based KEM standardized by NIST. "
-            "Its security relies on the hardness of the Module "
-            "Learning With Errors (MLWE) problem."
-        )
-
-    col_algo, col_runs = st.columns([3, 1])
-    with col_algo:
-        kem_algo = st.selectbox(
-            "Select KEM algorithm",
-            KEM_ALGORITHMS,
-            key="kem_algo",
-            help="ML-KEM is the FIPS 203 standard. Available in three security levels: 512, 768, 1024.",
-        )
-    with col_runs:
-        n_kem_runs = st.slider("Benchmark runs", 1, 20, 5, key="kem_runs",
-                               help="Number of iterations for timing benchmarks")
-
-    # Show algorithm info
-    info = ALGO_INFO.get(kem_algo)
-    if info:
-        st.info(f"**{kem_algo}**: {info[0]} | {info[2]}-based", icon="ℹ️")
-
-    st.markdown("---")
-    st.markdown("##### Follow the steps below: Generate → Encapsulate → Decapsulate")
-
-    # Track state for enabling/disabling steps
-    has_kp = "kem_kp" in st.session_state
-    has_enc = "kem_enc" in st.session_state
-
-    col_kg, col_enc, col_dec = st.columns(3)
-
-    # Step 1: Keygen
-    with col_kg:
-        st.markdown("**Step 1: Key Generation**")
-        if st.button("Generate Keypair", key="kem_keygen", use_container_width=True,
-                     type="primary" if not has_kp else "secondary"):
-            kp = kem_keygen(kem_algo)
-            st.session_state["kem_kp"] = kp
-            st.session_state.pop("kem_enc", None)  # reset downstream
-            has_kp = True
-
-        if has_kp:
-            kp = st.session_state["kem_kp"]
-            c1, c2 = st.columns(2)
-            c1.metric("Public Key", _format_bytes(len(kp.public_key)))
-            c2.metric("Secret Key", _format_bytes(len(kp.secret_key)))
-            st.metric("Keygen Time", f"{kp.keygen_time_ms:.3f} ms")
-            with st.expander("View public key (hex)", expanded=False):
-                st.code(kp.public_key[:64].hex() + "... (truncated)", language="text")
-            st.success("Keypair ready. Proceed to Step 2.", icon="✅")
-        else:
-            st.caption("Click the button above to generate a keypair.")
-
-    # Step 2: Encapsulation
-    with col_enc:
-        st.markdown("**Step 2: Encapsulate**")
-        if st.button("Encapsulate", key="kem_encaps", use_container_width=True,
-                     disabled=not has_kp,
-                     type="primary" if has_kp and not has_enc else "secondary"):
-            kp = st.session_state["kem_kp"]
-            enc = encaps(kem_algo, kp.public_key)
-            st.session_state["kem_enc"] = enc
-            has_enc = True
-
-        if not has_kp:
-            st.caption("Complete Step 1 first.")
-        elif has_enc:
-            enc = st.session_state["kem_enc"]
-            c1, c2 = st.columns(2)
-            c1.metric("Ciphertext", _format_bytes(len(enc.ciphertext)))
-            c2.metric("Shared Secret", f"{len(enc.shared_secret)} bytes")
-            st.metric("Encaps Time", f"{enc.time_ms:.3f} ms")
-            with st.expander("What happened?"):
-                st.markdown(
-                    f"Bob used Alice's **{len(st.session_state['kem_kp'].public_key):,}**-byte "
-                    f"public key to produce a **{len(enc.ciphertext):,}**-byte ciphertext and "
-                    f"a **{len(enc.shared_secret)}**-byte shared secret. The ciphertext is safe "
-                    "to send over an insecure channel."
-                )
-            st.success("Ciphertext created. Proceed to Step 3.", icon="✅")
-        else:
-            st.caption("Click the button above to encapsulate.")
-
-    # Step 3: Decapsulation
-    with col_dec:
-        st.markdown("**Step 3: Decapsulate**")
-        if st.button("Decapsulate", key="kem_decaps", use_container_width=True,
-                     disabled=not (has_kp and has_enc),
-                     type="primary" if has_kp and has_enc else "secondary"):
-            kp = st.session_state["kem_kp"]
-            enc = st.session_state["kem_enc"]
-            dec = decaps(kem_algo, kp.secret_key, enc.ciphertext)
-            match = dec.shared_secret == enc.shared_secret
-            st.metric("Shared Secret", f"{len(dec.shared_secret)} bytes")
-            st.metric("Decaps Time", f"{dec.time_ms:.3f} ms")
-            if match:
-                st.success("Shared secrets **match** -- key exchange successful!", icon="✅")
-            else:
-                st.error("Shared secrets do NOT match.", icon="❌")
-            with st.expander("What happened?"):
-                st.markdown(
-                    f"Alice used her **{len(kp.secret_key):,}**-byte secret key to decapsulate "
-                    f"the **{len(enc.ciphertext):,}**-byte ciphertext and recovered the same "
-                    f"**{len(dec.shared_secret)}**-byte shared secret. Both parties now share "
-                    "an identical key for symmetric encryption."
-                )
-
-        if not (has_kp and has_enc):
-            st.caption("Complete Steps 1 and 2 first.")
-
-    # KEM Benchmark
-    st.divider()
-    st.subheader("KEM Benchmarks")
-    st.caption("Runs keygen, encaps, and decaps for all KEM algorithms and reports average timing.")
-
-    if st.button("Run KEM Benchmarks", key="run_kem_bench", type="primary"):
-        with st.spinner("Benchmarking all KEM algorithms..."):
-            all_kem_results = []
-            progress = st.progress(0, text="Starting benchmarks...")
-            for i, algo in enumerate(KEM_ALGORITHMS):
-                progress.progress((i + 1) / len(KEM_ALGORITHMS),
-                                  text=f"Benchmarking {algo}...")
-                all_kem_results.extend(bench_kem(algo, n_kem_runs))
-            progress.empty()
-            df = pd.DataFrame([
-                {
-                    "algorithm": r.algorithm,
-                    "operation": r.operation,
-                    "mean_ms": round(r.mean_ms, 3),
-                    "stddev_ms": round(r.stddev_ms, 3),
-                    "peak_memory_kb": r.peak_memory_kb,
-                }
-                for r in all_kem_results
-            ])
-            st.session_state["kem_bench_df"] = df
-
-    if "kem_bench_df" in st.session_state:
-        df = st.session_state["kem_bench_df"]
-        st.plotly_chart(benchmark_bar_chart(df, "KEM Benchmark Results"), use_container_width=True)
-        with st.expander("View raw benchmark data"):
-            st.dataframe(df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "Download CSV",
-            df.to_csv(index=False),
-            "kem_benchmarks.csv",
-            "text/csv",
-            key="dl_kem_bench",
-        )
-
-# ===== TAB 2: Signature Demo ===============================================
-with tab_sig:
-    st.header("Digital Signatures")
-
-    with st.expander("About PQC Digital Signatures", expanded=False):
-        st.markdown(
-            "Digital signatures prove that a message was created by the holder of a "
-            "secret key, without revealing the key itself. PQC signatures replace "
-            "classical algorithms (Ed25519, ECDSA) that are vulnerable to quantum attack.\n\n"
-            "**ML-DSA** (FIPS 204): Lattice-based, larger signatures but "
-            "very fast. Recommended by NIST for general use.\n\n"
-            "**SLH-DSA** (FIPS 205): Hash-based, providing algorithmic diversity from "
-            "lattice schemes. Very small public keys (32-64 B) but very large signatures "
-            "(7.8 KB - 49.9 KB). Offers 's' (small) and 'f' (fast) parameter sets.\n\n"
-            "**Falcon**: Lattice-based (NTRU), produces **much smaller signatures** "
-            "(666 bytes vs 2,420 bytes at Level 1) but with more complex key generation. "
-            "Pending FIPS standardization as FN-DSA.\n\n"
-            "**Hybrid mode**: Concatenates Ed25519 + PQC signatures for dual "
-            "classical/quantum security during the transition period. "
-            "Note: this is a proof-of-concept concatenation without domain separation."
-        )
-
-    # Filter algorithms into categories for cleaner selection
-    non_hybrid = [a for a in SIG_ALGORITHMS if not a.startswith("Hybrid")]
-    hybrid = [a for a in SIG_ALGORITHMS if a.startswith("Hybrid")]
-
-    col_algo, col_cat = st.columns([3, 1])
-    with col_cat:
-        show_hybrid = st.checkbox("Show hybrid algorithms", value=False,
-                                  help="Hybrid = Ed25519 + PQC concatenated signatures")
-    with col_algo:
-        algo_choices = SIG_ALGORITHMS if show_hybrid else non_hybrid
-        sig_algo = st.selectbox(
-            "Select signature algorithm",
-            algo_choices,
-            key="sig_algo",
-            help="Choose an algorithm to demonstrate keygen, sign, and verify.",
-        )
-
-    info = ALGO_INFO.get(sig_algo.replace("Hybrid-Ed25519+", ""))
-    if sig_algo.startswith("Hybrid-"):
-        pqc = sig_algo.replace("Hybrid-Ed25519+", "")
-        st.info(f"**{sig_algo}**: Hybrid of Ed25519 + {pqc} (dual security)", icon="ℹ️")
-    elif info:
-        st.info(f"**{sig_algo}**: {info[0]} | {info[2]}-based", icon="ℹ️")
-
-    col_msg, col_runs = st.columns([3, 1])
-    with col_msg:
-        message_input = st.text_input("Message to sign", value="Hello, post-quantum world!",
-                                      help="The message that will be signed and verified")
-    with col_runs:
-        n_sig_runs = st.slider("Benchmark runs", 1, 20, 5, key="sig_runs")
-    message = message_input.encode()
-
-    st.markdown("---")
-    st.markdown("##### Follow the steps: Generate Keys → Sign → Verify")
-
-    has_sig_kp = "sig_kp" in st.session_state
-    has_sig_result = "sig_result" in st.session_state
-
-    col_skg, col_sgn, col_ver = st.columns(3)
-
-    with col_skg:
-        st.markdown("**Step 1: Key Generation**")
-        if st.button("Generate Signing Keypair", key="sig_keygen", use_container_width=True,
-                     type="primary" if not has_sig_kp else "secondary"):
-            kp = sign_keygen(sig_algo)
-            st.session_state["sig_kp"] = kp
-            st.session_state.pop("sig_result", None)
-            has_sig_kp = True
-
-        if has_sig_kp:
-            kp = st.session_state["sig_kp"]
-            c1, c2 = st.columns(2)
-            c1.metric("Public Key", _format_bytes(len(kp.public_key)))
-            c2.metric("Secret Key", _format_bytes(len(kp.secret_key)))
-            st.metric("Keygen Time", f"{kp.keygen_time_ms:.3f} ms")
-            # Size comparison to Ed25519
-            ed_pk = ED25519_PARAMS["public_key"]
-            ratio = len(kp.public_key) / ed_pk
-            if ratio > 1.5:
-                st.caption(f"Public key is **{ratio:.0f}x larger** than Ed25519 ({ed_pk} B)")
-            elif ratio < 1.0:
-                st.caption(f"Public key is **smaller** than Ed25519 ({ed_pk} B)")
-            st.success("Keypair ready. Proceed to Step 2.", icon="✅")
-        else:
-            st.caption("Click the button above to generate a keypair.")
-
-    with col_sgn:
-        st.markdown("**Step 2: Sign Message**")
-        if st.button("Sign Message", key="sig_sign", use_container_width=True,
-                     disabled=not has_sig_kp,
-                     type="primary" if has_sig_kp and not has_sig_result else "secondary"):
-            kp = st.session_state["sig_kp"]
-            sr = sign(sig_algo, kp.secret_key, message, kp)
-            st.session_state["sig_result"] = sr
-            has_sig_result = True
-
-        if not has_sig_kp:
-            st.caption("Complete Step 1 first.")
-        elif has_sig_result:
-            sr = st.session_state["sig_result"]
-            st.metric("Signature Size", _format_bytes(sr.signature_size))
-            st.metric("Sign Time", f"{sr.time_ms:.3f} ms")
-            ed_sig = ED25519_PARAMS["signature"]
-            ratio = sr.signature_size / ed_sig
-            if ratio > 1.5:
-                st.metric("vs Ed25519", f"{ratio:.1f}x larger",
-                          delta=f"+{sr.signature_size - ed_sig:,} bytes", delta_color="inverse")
-            with st.expander("What happened?"):
-                st.markdown(
-                    f"The message \"{message_input}\" was signed with **{sig_algo}**, "
-                    f"producing a **{sr.signature_size:,}**-byte signature. "
-                    f"For comparison, Ed25519 produces a **{ed_sig}**-byte signature."
-                )
-            st.success("Signature ready. Proceed to Step 3.", icon="✅")
-        else:
-            st.caption("Click the button above to sign the message.")
-
-    with col_ver:
-        st.markdown("**Step 3: Verify Signature**")
-        if st.button("Verify Signature", key="sig_verify", use_container_width=True,
-                     disabled=not (has_sig_kp and has_sig_result),
-                     type="primary" if has_sig_kp and has_sig_result else "secondary"):
-            kp = st.session_state["sig_kp"]
-            sr = st.session_state["sig_result"]
-            vr = verify(sig_algo, kp.public_key, message, sr.signature, kp)
-            st.metric("Verify Time", f"{vr.time_ms:.3f} ms")
-            if vr.valid:
-                st.success("Signature is **VALID** -- message authenticity confirmed!", icon="✅")
-            else:
-                st.error("Signature is **INVALID** -- message may have been tampered with.", icon="❌")
-            with st.expander("What happened?"):
-                st.markdown(
-                    f"The verifier checked the **{sr.signature_size:,}**-byte signature against "
-                    f"the **{len(kp.public_key):,}**-byte public key and the original message. "
-                    f"{'The signature was valid, confirming the message was not tampered with.' if vr.valid else 'The signature did not match, indicating possible tampering.'}"
-                )
-
-        if not (has_sig_kp and has_sig_result):
-            st.caption("Complete Steps 1 and 2 first.")
-
-    # Signature Benchmark
-    st.divider()
-    st.subheader("Signature Benchmarks")
-    st.caption("Runs keygen, sign, and verify for all signature algorithms and reports average timing.")
-
-    if st.button("Run Signature Benchmarks", key="run_sig_bench", type="primary"):
-        with st.spinner("Benchmarking all signature algorithms..."):
-            all_sig_results = []
-            bench_algos = SIG_ALGORITHMS if show_hybrid else non_hybrid
-            progress = st.progress(0, text="Starting benchmarks...")
-            for i, algo in enumerate(bench_algos):
-                progress.progress((i + 1) / len(bench_algos),
-                                  text=f"Benchmarking {algo}...")
-                all_sig_results.extend(bench_sig(algo, n_sig_runs))
-            progress.empty()
-            df = pd.DataFrame([
-                {
-                    "algorithm": r.algorithm,
-                    "operation": r.operation,
-                    "mean_ms": round(r.mean_ms, 3),
-                    "stddev_ms": round(r.stddev_ms, 3),
-                    "peak_memory_kb": r.peak_memory_kb,
-                }
-                for r in all_sig_results
-            ])
-            st.session_state["sig_bench_df"] = df
-
-    if "sig_bench_df" in st.session_state:
-        df = st.session_state["sig_bench_df"]
-        st.plotly_chart(benchmark_bar_chart(df, "Signature Benchmark Results"), use_container_width=True)
-        with st.expander("View raw benchmark data"):
-            st.dataframe(df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "Download CSV",
-            df.to_csv(index=False),
-            "signature_benchmarks.csv",
-            "text/csv",
-            key="dl_sig_bench",
-        )
-
-# ===== TAB 3: Block-Space Visualizer =======================================
+# ===== TAB 1: Block-Space Visualizer =======================================
 with tab_block:
     st.header("Block-Space Impact Analysis")
     st.caption(
@@ -852,7 +499,7 @@ with tab_block:
         icon="💡",
     )
 
-# ===== TAB 4: Side-by-Side Comparison ======================================
+# ===== TAB 2: Side-by-Side Comparison ======================================
 with tab_compare:
     st.header("Side-by-Side Algorithm Comparison")
 

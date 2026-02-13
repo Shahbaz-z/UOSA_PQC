@@ -12,26 +12,6 @@ from plotly.subplots import make_subplots
 from blockchain.solana_model import BlockAnalysis
 
 
-def benchmark_bar_chart(df: pd.DataFrame, title: str = "Benchmark Results") -> go.Figure:
-    """Grouped bar chart: mean_ms by algorithm, grouped by operation."""
-    fig = px.bar(
-        df,
-        x="algorithm",
-        y="mean_ms",
-        color="operation",
-        barmode="group",
-        error_y="stddev_ms",
-        title=title,
-        labels={"mean_ms": "Time (ms)", "algorithm": "Algorithm"},
-    )
-    fig.update_layout(
-        legend_title_text="Operation",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis_tickangle=-45,
-    )
-    return fig
-
-
 def block_space_chart(analyses: List[BlockAnalysis], chain: str = "Solana") -> go.Figure:
     """Horizontal bar chart showing txs_per_block for each signature type."""
     df = pd.DataFrame([
