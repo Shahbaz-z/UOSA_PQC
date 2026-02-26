@@ -1,6 +1,6 @@
 # Methodology
 
-This document describes the models and assumptions used by the Blockchain Quantum Resistance Educator.
+This document describes the models and assumptions used by the PQC Cross-Chain Simulator.
 
 ## 1. Signature & KEM Parameters
 
@@ -25,9 +25,9 @@ All artifact sizes (public keys, secret keys, signatures, ciphertexts) match the
 | Slot time | 400 ms | Target slot duration |
 | Vote tx overhead | 0-85% | Validator vote transactions consuming block space |
 
-**Transaction size** = base_overhead + (signature_bytes + public_key_bytes) × num_signers
+**Transaction size** = base_overhead + (signature_bytes + public_key_bytes) x num_signers
 
-**Txs per block** = (block_size × (1 - vote_pct)) ÷ tx_size
+**Txs per block** = (block_size x (1 - vote_pct)) / tx_size
 
 **Vote transaction modeling:** In production, 70-80% of Solana block space is consumed by validator vote transactions. The vote overhead parameter reduces available block capacity proportionally.
 
@@ -45,11 +45,11 @@ All artifact sizes (public keys, secret keys, signatures, ciphertexts) match the
 - Non-witness data (base overhead): **4 weight units per byte**
 - Witness data (signatures + public keys): **1 weight unit per byte**
 
-**Tx weight** = (base_overhead × 4) + (signature_bytes + public_key_bytes) × num_signers × 1
+**Tx weight** = (base_overhead x 4) + (signature_bytes + public_key_bytes) x num_signers x 1
 
 This discount means PQC signatures (which are all witness data) benefit from the 4:1 reduction. A 3,293-byte ML-DSA-65 signature costs 3,293 WU rather than 13,172 WU.
 
-**Txs per block** = block_weight_limit ÷ tx_weight
+**Txs per block** = block_weight_limit / tx_weight
 
 ### 2.3 Ethereum
 
@@ -63,7 +63,7 @@ This discount means PQC signatures (which are all witness data) benefit from the
 | Base tx overhead | 120 B | Non-signature calldata (to, value, nonce, etc.) |
 | Block time | 12,000 ms | Post-Merge slot time |
 
-**Tx gas** = 21,000 + (base_overhead + signature_bytes + public_key_bytes) × num_signers × 16
+**Tx gas** = 21,000 + (base_overhead + signature_bytes + public_key_bytes) x num_signers x 16
 
 **Gas limit roadmap modeled:**
 
@@ -75,76 +75,59 @@ This discount means PQC signatures (which are all witness data) benefit from the
 | 2026 Q2 | 80,000,000 |
 | 2026 target | 180,000,000 |
 
-## 3. ZK Proof System Models
+## 3. Verification Time Model
 
-Models ZK-STARK and ZK-SNARK proof systems on Ethereum's gas model.
+Models how long it takes to verify all signatures in a block, identifying whether verification time (not just block space) becomes the throughput bottleneck with PQC schemes.
 
-### 3.1 Proof Systems
+### 3.1 Per-Algorithm Verification Times
 
-| System | Family | Proof Size | Verification Gas | Quantum Resistant | Trusted Setup |
-|--------|--------|-----------|-----------------|-------------------|---------------|
-| Groth16 | SNARK | 128 B | 200,000 | No | Yes (per-circuit) |
-| PLONK | SNARK | 560 B | 300,000 | No | Yes (universal) |
-| Halo2 | SNARK | 4,800 B | 500,000 | No | No (IPA) |
-| STARK-S | STARK | 45,000 B | 1,200,000 | Yes | No |
-| STARK-L | STARK | 200,000 B | 5,000,000 | Yes | No |
+| Algorithm | Verify Time (us) | Batch Speedup | Source |
+|-----------|------------------|---------------|--------|
+| Ed25519 | 60 | 0.5x (batch) | libsodium, dalek-cryptography |
+| ECDSA | 80 | 1.0x | libsecp256k1 |
+| Schnorr | 60 | 0.4x (MuSig) | libsecp256k1 |
+| ML-DSA-44 | 180 | 1.0x | liboqs (AVX2) |
+| ML-DSA-65 | 300 | 1.0x | liboqs (AVX2) |
+| ML-DSA-87 | 500 | 1.0x | liboqs (AVX2) |
+| Falcon-512 | 100 | 1.0x | liboqs (fast verify) |
+| Falcon-1024 | 200 | 1.0x | liboqs |
+| SLH-DSA-128s | 3,000 | 1.0x | liboqs (hash-heavy) |
+| SLH-DSA-128f | 500 | 1.0x | liboqs |
+| SLH-DSA-256f | 2,000 | 1.0x | liboqs |
 
-**Tx gas for ZK proof** = 21,000 (base) + proof_bytes × 16 (calldata) + verification_gas
+### 3.2 Block Verification Model
 
-**Key distinction:**
-- ZK-STARKs are hash-based and quantum-resistant
-- ZK-SNARKs rely on elliptic-curve pairings vulnerable to Shor's algorithm
+**Serial time** = verify_time_us x txs_per_block / 1000 (ms)
 
-**Sources:**
-- StarkWare documentation for STARK proof sizes
-- Ethereum EIP-196/197 for bn128 precompile gas costs
-- ethSTARK documentation for on-chain verification costs
-- Groth16: 3 group elements on bn128 (~128 bytes)
+**Parallel time** = serial_time / num_cores (if parallelizable)
 
-### 3.2 Limitations
+**Effective TPS** = min(block_space_TPS, verification_limited_TPS)
 
-- Models single-proof-per-transaction (not batched rollup economics)
-- Does not model recursive proof composition or proof aggregation
-- Does not account for EIP-4844 blob-based data availability
-- Verification gas costs are approximate (vary with circuit complexity)
+**Bottleneck** = whichever limit is lower determines the actual throughput.
 
-## 4. Quantum Resistance (QR) Scoring Model
+### 3.3 Key Insight
 
-Produces a composite 0-100 score per blockchain across five weighted dimensions.
+Falcon-512 has verification times close to Ed25519 (100us vs 60us), making it the best PQC option for verification-limited chains like Solana. SLH-DSA variants (3-8ms per verify) create severe verification bottlenecks on all chains.
 
-### 4.1 Dimensions and Weights
+## 4. Signature Aggregation Model
 
-| Dimension | Weight | Scoring Method |
-|-----------|--------|----------------|
-| Throughput Retention | 30% | Best PQC algorithm's relative throughput × 100 |
-| Migration Feasibility | 25% | Qualitative assessment (0-100) |
-| Signature Size | 20% | max(0, 100 - 15 × log2(pqc_size / classical_size)) |
-| ZK Readiness | 15% | Qualitative assessment (0-100) |
-| Algorithm Diversity | 10% | 25 points per viable PQC family (>10% retention) |
+Models how aggregation techniques reduce per-transaction signature overhead.
 
-### 4.2 Letter Grades
+### 4.1 Aggregation Schemes
 
-| Grade | Score Range |
-|-------|------------|
-| A | 85-100 |
-| B | 75-84 |
-| C | 60-74 |
-| D | 45-59 |
-| F | 0-44 |
+| Scheme | Sig Size Formula | PK Size Formula | Verify Factor | QR? |
+|--------|-----------------|-----------------|---------------|-----|
+| None | sig x n | pk x n | 1.0x | depends |
+| BLS (BLS12-381) | 48 B (constant) | 48 x n | 1.5x | No |
+| Falcon Merkle Tree | sig + 32 x log2(n) | 32 B (root) | 1.2x | Yes |
+| ML-DSA Batch | sig x n (no reduction) | pk x n | 0.6x | Yes |
 
-### 4.3 Qualitative Scores
+### 4.2 Key Insights
 
-Migration feasibility and ZK readiness are qualitative assessments reflecting:
-- **Migration Feasibility:** Account model (UTXO vs account), hard fork requirements, governance speed, existing PQC research
-- **ZK Readiness:** Native ZK precompiles, active ZK rollup ecosystem, STARK verification feasibility
-
-### 4.4 Limitations
-
-- Qualitative scores encode expert judgment, not empirical measurements
-- Does not model ecosystem readiness (wallet support, developer tooling)
-- Does not predict governance velocity or economic migration incentives
-- Algorithm diversity counts families, not the quality of implementations
-- ZK readiness is Ethereum-centric (other chains have different L2 strategies)
+- **BLS** offers the best compression (constant 48B) but is NOT quantum-resistant
+- **Falcon-Tree** provides >90% size reduction at batch=100 while remaining quantum-resistant
+- **ML-DSA-Batch** doesn't reduce size but speeds up verification by ~40%
+- Aggregation is most impactful on chains where block space is the bottleneck (Solana, Bitcoin)
 
 ## 5. Benchmark Methodology
 
@@ -162,7 +145,7 @@ Migration feasibility and ZK readiness are qualitative assessments reflecting:
 
 - All models are **static analysis** of protocol parameters, not real-world deployment simulations
 - Transaction mix is homogeneous (all simple transfers); does not model DEX swaps, DeFi, NFTs
-- Does not model verification time impact on block processing
 - Does not model network propagation delays from larger transactions
-- Does not account for compression techniques or signature aggregation
+- Does not account for compression techniques beyond the modeled aggregation schemes
 - Mock mode provides accurate sizes but synthetic timing
+- Verification times are representative benchmarks, not measured on the user's hardware

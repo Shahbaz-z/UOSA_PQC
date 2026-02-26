@@ -35,6 +35,7 @@ SIGNATURE_SIZES: Dict[str, int] = {
     "Ed25519": 64,
     "ECDSA": 72,  # DER-encoded secp256k1 (Bitcoin/Ethereum baseline)
     "Schnorr": 64,  # BIP 340 (Bitcoin Taproot) - fixed size
+    "BLS12-381": 96,  # BLS signature (two G1 points, Ethereum consensus)
     # FIPS 204 -- ML-DSA
     "ML-DSA-44": 2_420,
     "ML-DSA-65": 3_293,
@@ -61,6 +62,7 @@ PUBLIC_KEY_SIZES: Dict[str, int] = {
     "Ed25519": 32,
     "ECDSA": 33,  # compressed secp256k1
     "Schnorr": 32,  # BIP 340 x-only pubkey
+    "BLS12-381": 48,  # BLS public key (one G1 point)
     "ML-DSA-44": 1_312,
     "ML-DSA-65": 1_952,
     "ML-DSA-87": 2_592,
@@ -158,6 +160,10 @@ class BlockAnalysis:
     signature_overhead_pct: float
     throughput_tps: float
     relative_to_baseline: float  # throughput ratio vs chain baseline
+    # Verification time fields (populated when verification model is used)
+    verification_time_ms: float = 0.0     # Time to verify all sigs in block (parallel)
+    effective_tps: float = 0.0            # min(space-limited TPS, verification-limited TPS)
+    bottleneck: str = "block_space"       # "block_space" or "verification"
 
 
 @dataclass
@@ -417,6 +423,47 @@ def compare_all_ethereum(
     ]
     baseline = next(a for a in analyses if a.signature_type == "ECDSA")
     return ComparativeAnalysis(chain="Ethereum", baseline=baseline, analyses=analyses)
+
+
+# ---------------------------------------------------------------------------
+# Verification time integration
+# ---------------------------------------------------------------------------
+
+def enrich_with_verification(
+    analysis: BlockAnalysis,
+    block_time_ms: float,
+    num_cores: int = 4,
+    use_batch: bool = True,
+) -> BlockAnalysis:
+    """Add verification time data to a BlockAnalysis result.
+
+    Computes how long it takes to verify all signatures in the block
+    and determines whether verification or block space is the bottleneck.
+    """
+    from blockchain.verification import (
+        compute_block_verification_time,
+        VERIFICATION_PROFILES,
+    )
+
+    if analysis.signature_type not in VERIFICATION_PROFILES:
+        return analysis
+
+    vr = compute_block_verification_time(
+        algorithm=analysis.signature_type,
+        txs_per_block=analysis.txs_per_block,
+        block_time_ms=block_time_ms,
+        num_cores=num_cores,
+        use_batch=use_batch,
+    )
+
+    space_tps = analysis.throughput_tps
+    verify_tps = vr.effective_tps
+
+    analysis.verification_time_ms = vr.parallel_time_ms
+    analysis.effective_tps = round(min(space_tps, verify_tps), 2)
+    analysis.bottleneck = "verification" if verify_tps < space_tps else "block_space"
+
+    return analysis
 
 
 if __name__ == "__main__":

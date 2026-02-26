@@ -1,18 +1,18 @@
-# Blockchain Quantum Resistance Educator
+# PQC Cross-Chain Simulator
 
-Interactive educational tool for exploring how post-quantum cryptography (PQC) affects blockchain transaction throughput on **Solana**, **Bitcoin**, and **Ethereum**.
+A cross-chain simulator quantifying how post-quantum cryptography (PQC) signatures change security, decentralisation, and fees in real blockchain networks -- **Solana**, **Bitcoin**, and **Ethereum**.
 
 ## What This Project Does
 
-Blockchains rely on digital signatures (Ed25519, ECDSA, Schnorr) that are vulnerable to quantum computers via Shor's algorithm. PQC signatures are **10-700x larger**, directly reducing throughput. This tool models that impact across three major blockchains and compares PQC signatures against ZK proof systems.
+Blockchains rely on digital signatures (Ed25519, ECDSA, Schnorr) that are vulnerable to quantum computers via Shor's algorithm. PQC signatures are **10-700x larger** and verification is **2-50x slower**, directly reducing throughput. This simulator models that impact across three major blockchains, including verification time bottlenecks and signature aggregation strategies.
 
 ### Features
 
 - **Block-Space Visualizer** -- Per-chain throughput impact analysis with adjustable parameters (Solana vote overhead, Bitcoin SegWit discount, Ethereum gas limits 30M-180M)
 - **Side-by-Side Comparison** -- Compare keygen/sign/verify across multiple algorithms
 - **Cross-Chain Summary** -- Compare PQC migration impact across all three blockchains
-- **ZK Proof Analysis** -- ZK-STARK vs ZK-SNARK comparison on Ethereum (proof size, gas cost, quantum resistance)
-- **QR Score** -- Composite quantum resistance readiness scoring (0-100) with letter grades per chain
+- **Verification Time Modeling** -- Identifies whether block space or signature verification is the throughput bottleneck
+- **Signature Aggregation** -- Models BLS, Falcon Merkle Tree, and ML-DSA batch verification schemes
 - **Mock Mode** -- Runs without liboqs; artifact sizes remain NIST-accurate, timing is synthetic
 - **Benchmark Harness** -- CLI timing and memory profiling with CSV export
 
@@ -72,8 +72,8 @@ pqc_lib/                PQC algorithm wrappers
 
 blockchain/             Blockchain impact modeling
   chain_models.py       Solana, Bitcoin, and Ethereum block-space analysis
-  zk_models.py          ZK-STARK/ZK-SNARK proof system models
-  qr_score.py           Quantum resistance readiness scoring model
+  verification.py       Signature verification time modeling
+  aggregation.py        Signature aggregation scheme models
 
 app/                    Streamlit application
   pqc_demo_streamlit.py Main orchestrator (sidebar, page config, tab setup)
@@ -81,21 +81,20 @@ app/                    Streamlit application
     block_space.py      Tab 1: Block-Space Visualizer
     comparison.py       Tab 2: Side-by-Side Comparison
     cross_chain.py      Tab 3: Cross-Chain Summary
-    zk_proofs.py        Tab 4: ZK Proof Analysis
-    qr_score.py         Tab 5: QR Score
   components/
-    charts.py           Reusable Plotly chart builders (10 chart functions)
+    charts.py           Reusable Plotly chart builders
 
 benchmarks/             Benchmark harness and results
   bench.py              CLI benchmark runner with CSV export
 
-tests/                  Unit tests (pytest, 364 tests)
+tests/                  Unit tests (pytest)
   test_signatures.py    Signature algorithm tests
   test_kem.py           KEM algorithm tests
   test_solana_model.py  Blockchain model tests (all 3 chains + input validation)
-  test_zk_models.py     ZK proof system tests
-  test_qr_score.py      QR scoring model tests
-  test_charts.py        Chart function tests (all 10 chart builders)
+  test_verification.py  Verification time model tests
+  test_aggregation.py   Aggregation scheme tests
+  test_charts.py        Chart function tests
+  test_ui_integration.py Streamlit app integration tests
 
 .github/workflows/      CI/CD
   ci.yml                GitHub Actions: test + lint on Python 3.10-3.12
@@ -118,14 +117,6 @@ docs/                   Methodology documentation
 | SLH-DSA-128s | PQC | FIPS 205 | 7,856 B | 32 B | 1 |
 | SLH-DSA-128f | PQC | FIPS 205 | 17,088 B | 32 B | 1 |
 
-## KEM Algorithms
-
-| Algorithm | Type | Standard | CT Size | PK Size | NIST Level |
-|-----------|------|----------|---------|---------|------------|
-| ML-KEM-512 | PQC | FIPS 203 | 768 B | 800 B | 1 |
-| ML-KEM-768 | PQC | FIPS 203 | 1,088 B | 1,184 B | 3 |
-| ML-KEM-1024 | PQC | FIPS 203 | 1,568 B | 1,568 B | 5 |
-
 ## Blockchain Models
 
 | Chain | Baseline Sig | Block Limit | Block Time | Key Feature |
@@ -133,16 +124,6 @@ docs/                   Methodology documentation
 | Solana | Ed25519 | ~6 MB | 400 ms | Vote tx overhead (70-80%) |
 | Bitcoin | ECDSA/Schnorr | 4 MWU | 10 min | SegWit witness discount (1/4 weight) |
 | Ethereum | ECDSA | 30M gas (2024) | 12 s | Gas-based costing, 2026 increases to 180M |
-
-## QR Score Dimensions
-
-| Dimension | Weight | What It Measures |
-|-----------|--------|------------------|
-| Throughput Retention | 30% | Best PQC algorithm's throughput vs baseline |
-| Migration Feasibility | 25% | Practical difficulty of PQC adoption |
-| Signature Size | 20% | PQC signature inflation vs classical |
-| ZK Readiness | 15% | Chain's ZK-STARK infrastructure |
-| Algorithm Diversity | 10% | Number of viable PQC algorithm families |
 
 ## Environment Variables
 

@@ -1,11 +1,9 @@
-"""Blockchain Quantum Resistance Educator -- Streamlit Application.
+"""PQC Cross-Chain Simulator -- Streamlit Application.
 
-Five tabs:
+Three tabs:
 1. Block-Space Visualizer -- Solana, Bitcoin & Ethereum throughput impact analysis
 2. Side-by-Side Comparison -- Compare multiple signature algorithms at once
 3. Cross-Chain Summary -- Compare PQC impact across all three blockchains
-4. ZK-STARKs Analysis -- Zero-knowledge proof systems and quantum resistance
-5. QR Score -- Composite quantum resistance readiness scoring per chain
 
 Each tab is implemented in a separate module under app/tabs/ to keep
 individual files manageable. This file handles page config, sidebar, and
@@ -31,8 +29,6 @@ from app.tabs import (
     render_block_space,
     render_comparison,
     render_cross_chain,
-    render_zk_proofs,
-    render_qr_score,
 )
 
 # ---------------------------------------------------------------------------
@@ -113,7 +109,7 @@ CHAIN_QUANTUM_CONTEXT = {
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Blockchain Quantum Resistance Educator",
+    page_title="PQC Cross-Chain Simulator",
     page_icon="⛓️",
     layout="wide",
 )
@@ -122,7 +118,7 @@ st.set_page_config(
 # Sidebar -- global info and quick reference
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("⛓️ Blockchain QR Educator")
+    st.title("⛓️ PQC Chain Simulator")
 
     if MOCK_MODE:
         st.warning(
@@ -188,33 +184,27 @@ with st.sidebar:
     st.markdown(
         "1. **Block-Space** -- Per-chain impact analysis\n"
         "2. **Compare** -- Side-by-side algorithm comparison\n"
-        "3. **Cross-Chain** -- Summary across all blockchains\n"
-        "4. **ZK Proofs** -- Zero-knowledge proof analysis\n"
-        "5. **QR Score** -- Quantum resistance readiness grades"
+        "3. **Cross-Chain** -- Summary across all blockchains"
     )
 
 # ---------------------------------------------------------------------------
 # Main title
 # ---------------------------------------------------------------------------
-st.title("Blockchain Quantum Resistance Educator")
+st.title("PQC Cross-Chain Simulator")
 st.caption(
-    "An interactive educational tool for exploring how post-quantum cryptography "
-    "affects blockchain transaction throughput on Solana, Bitcoin, and Ethereum."
+    "A cross-chain simulator quantifying how post-quantum cryptography signatures "
+    "change security, decentralisation, and fees in real blockchain networks."
 )
 
 # ---------------------------------------------------------------------------
 # Tab layout -- rendering delegated to app.tabs modules
 # ---------------------------------------------------------------------------
-tab_block, tab_compare, tab_crosschain, tab_zk, tab_qr = st.tabs([
+tab_block, tab_compare, tab_crosschain = st.tabs([
     "📊 Block-Space Visualizer",
     "⚖️ Side-by-Side Comparison",
     "🌐 Cross-Chain Summary",
-    "🔐 ZK Proof Analysis",
-    "🎯 QR Score",
 ])
 
 render_block_space(tab_block, CHAIN_QUANTUM_CONTEXT)
 render_comparison(tab_compare)
 render_cross_chain(tab_crosschain, CHAIN_QUANTUM_CONTEXT)
-render_zk_proofs(tab_zk)
-render_qr_score(tab_qr)
