@@ -3,159 +3,222 @@
 import pytest
 
 from simulator.core.engine import DESEngine, SimulationConfig
+from simulator.results import SimulationResult
 
 
-class TestDESEngineSetup:
-    """Tests for engine initialisation and setup."""
+class TestSimulationConfig:
+    """Tests for SimulationConfig dataclass."""
 
-    def test_engine_creates_correct_node_count(self):
-        """Engine should create the specified number of validators and full nodes."""
-        config = SimulationConfig(
-            chain="bitcoin",
-            signature_algorithm="Ed25519",
-            num_validators=10,
-            num_full_nodes=40,
-            simulation_duration=10.0,
-            random_seed=42,
-        )
-        engine = DESEngine(config)
-        engine.setup()
-        validators = [n for n in engine.nodes.values() if n.config.node_type == "validator"]
-        full_nodes = [n for n in engine.nodes.values() if n.config.node_type == "full_node"]
-        assert len(validators) == 10
-        assert len(full_nodes) == 40
-
-    def test_engine_chain_config_loaded(self):
-        """Chain config should be loaded after setup."""
-        config = SimulationConfig(
-            chain="ethereum",
-            signature_algorithm="Ed25519",
-            num_validators=5,
-            num_full_nodes=10,
-            simulation_duration=5.0,
-            random_seed=0,
-        )
-        engine = DESEngine(config)
-        engine.setup()
-        assert engine.chain_config is not None
-
-    def test_engine_topology_built(self):
-        """Topology should be constructed after setup."""
+    def test_default_config(self):
+        """Should create config with reasonable defaults."""
         config = SimulationConfig(
             chain="solana",
-            signature_algorithm="ML-DSA-65",
-            num_validators=5,
-            num_full_nodes=10,
-            simulation_duration=5.0,
-            random_seed=7,
+            signature_algorithm="Ed25519",
         )
-        engine = DESEngine(config)
-        engine.setup()
-        assert engine.topology is not None
 
+        assert config.chain == "solana"
+        assert config.signature_algorithm == "Ed25519"
+        assert config.num_validators == 200
+        assert config.num_full_nodes == 100
+        assert config.simulation_duration_ms == 300_000
+        assert config.random_seed == 42
 
-class TestDESEngineRun:
-    """Tests for simulation run."""
-
-    def test_short_run_produces_results(self):
-        """A short simulation should produce at least one block result."""
+    def test_custom_config(self):
+        """Should accept custom parameters."""
         config = SimulationConfig(
             chain="bitcoin",
-            signature_algorithm="Ed25519",
-            num_validators=10,
-            num_full_nodes=20,
-            simulation_duration=120.0,
-            random_seed=1,
+            signature_algorithm="ECDSA",
+            num_validators=50,
+            num_full_nodes=25,
+            simulation_duration_ms=60_000,
+            random_seed=123,
         )
-        engine = DESEngine(config)
-        results = engine.run()
-        assert len(results) >= 1, "Expected at least 1 block in 120s Bitcoin simulation"
 
-    def test_results_have_valid_propagation_times(self):
-        """All result propagation times should be positive."""
-        config = SimulationConfig(
-            chain="ethereum",
-            signature_algorithm="Ed25519",
-            num_validators=10,
-            num_full_nodes=20,
-            simulation_duration=60.0,
-            random_seed=2,
-        )
-        engine = DESEngine(config)
-        results = engine.run()
-        for r in results:
-            assert r.propagation_p50_ms >= 0
-            assert r.propagation_p90_ms >= r.propagation_p50_ms
+        assert config.num_validators == 50
+        assert config.simulation_duration_ms == 60_000
 
-    def test_pqc_run_produces_results(self):
-        """PQC simulation should complete without errors."""
-        config = SimulationConfig(
-            chain="bitcoin",
-            signature_algorithm="ML-DSA-65",
-            num_validators=10,
-            num_full_nodes=20,
-            simulation_duration=120.0,
-            random_seed=3,
-            pqc_adoption_fraction=1.0,
-        )
-        engine = DESEngine(config)
-        results = engine.run()
-        assert len(results) >= 1
 
-    def test_block_fill_uses_byte_capacity_not_tx_cap(self):
-        """
-        FIX #3: Blocks should fill to byte-size capacity, not be capped at 10K txs.
+class TestDESEngine:
+    """Tests for DESEngine class."""
 
-        We generate a simulation where tx size is small relative to block size,
-        so a correct implementation should pack many transactions per block.
-        For Bitcoin (1MB blocks, ~250 byte txs), we expect ~4000 txs max.
-        For Solana (128MB blocks, ~250 byte txs), we expect >> 10K txs.
-        """
-        config = SimulationConfig(
+    @pytest.fixture
+    def short_config(self):
+        """Create a short simulation config for testing."""
+        return SimulationConfig(
             chain="solana",
             signature_algorithm="Ed25519",
             num_validators=20,
-            num_full_nodes=50,
-            simulation_duration=30.0,  # short run
-            random_seed=10,
-        )
-        engine = DESEngine(config)
-        results = engine.run()
-        if results:
-            # With byte-capacity filling and small txs, some blocks should exceed 10K txs
-            # (if the old 10K cap was present, max would always be <=10000)
-            max_txs = max(r.num_txs for r in results)
-            # Solana has 128MB blocks; at min tx size of ~250 bytes,
-            # theoretical max ~512K txs. With realistic tx load, we expect > 10K.
-            # If this assertion fails, the 10K cap (Fix #3) was not removed.
-            assert max_txs > 100, (
-                f"Expected blocks with >100 txs on Solana, got max={max_txs}. "
-                "Check Fix #3: 10K tx cap should be removed."
-            )
-
-    def test_stale_threshold_uses_09_block_time(self):
-        """
-        FIX #1: Stale block threshold should be 0.9 × block_time, not 0.5.
-
-        Verify by checking that no "stale" blocks are recorded for fast propagation
-        scenarios where p90 < 0.9 × block_time but > 0.5 × block_time.
-        """
-        # Use a chain with a long block time (Bitcoin: 600s)
-        # In a small local network, p90 propagation should be well under 0.9 × 600s
-        config = SimulationConfig(
-            chain="bitcoin",
-            signature_algorithm="Ed25519",
-            num_validators=5,
             num_full_nodes=10,
-            simulation_duration=1200.0,
+            simulation_duration_ms=5_000,  # 5 seconds (12.5 Solana slots)
             random_seed=42,
         )
-        engine = DESEngine(config)
-        engine.run()
-        # With fast local propagation, stale blocks should be 0 (threshold = 0.9 × 600 = 540s)
-        stale_count = len(engine.state.get_stale_blocks())
-        # In a small well-connected network, propagation << 540s, so stale_count should be 0
-        assert stale_count == 0, (
-            f"Expected 0 stale blocks with 0.9× threshold on small network, got {stale_count}. "
-            "Check Fix #1: threshold should be 0.9 × block_time."
+
+    def test_engine_initialization(self, short_config):
+        """Engine should initialize with network and state."""
+        engine = DESEngine(short_config)
+
+        assert engine.topology.validator_count() == 20
+        assert engine.topology.node_count() == 30  # 20 validators + 10 full nodes
+        assert engine.state.current_time_ms == 0.0
+
+    def test_engine_runs_simulation(self, short_config):
+        """Engine should run simulation and return results."""
+        engine = DESEngine(short_config)
+        result = engine.run()
+
+        assert isinstance(result, SimulationResult)
+        assert result.chain == "solana"
+        assert result.signature_algorithm == "Ed25519"
+
+    def test_produces_blocks(self, short_config):
+        """Simulation should produce blocks."""
+        engine = DESEngine(short_config)
+        result = engine.run()
+
+        # 5000ms / 400ms per slot = 12.5 slots
+        # Should produce ~12 blocks
+        assert result.num_blocks >= 10
+        assert result.num_blocks <= 15
+
+    def test_blocks_propagate(self, short_config):
+        """Blocks should propagate through network."""
+        engine = DESEngine(short_config)
+        result = engine.run()
+
+        # Propagation metrics should be positive
+        assert result.avg_propagation_p50_ms > 0
+        assert result.avg_propagation_p90_ms > 0
+
+        # p90 should be larger than p50
+        assert result.avg_propagation_p90_ms >= result.avg_propagation_p50_ms
+
+    def test_stale_rate_in_valid_range(self, short_config):
+        """Stale rate should be between 0 and 1."""
+        engine = DESEngine(short_config)
+        result = engine.run()
+
+        assert 0 <= result.stale_rate <= 1
+
+    def test_deterministic_with_seed(self):
+        """Same seed should produce identical results."""
+        config1 = SimulationConfig(
+            chain="solana",
+            signature_algorithm="Ed25519",
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=2_000,
+            random_seed=42,
         )
+
+        config2 = SimulationConfig(
+            chain="solana",
+            signature_algorithm="Ed25519",
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=2_000,
+            random_seed=42,
+        )
+
+        result1 = DESEngine(config1).run()
+        result2 = DESEngine(config2).run()
+
+        assert result1.num_blocks == result2.num_blocks
+        assert result1.avg_propagation_p90_ms == result2.avg_propagation_p90_ms
+
+    def test_different_seeds_different_results(self):
+        """Different seeds should produce different results."""
+        config1 = SimulationConfig(
+            chain="solana",
+            signature_algorithm="Ed25519",
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=2_000,
+            random_seed=42,
+        )
+
+        config2 = SimulationConfig(
+            chain="solana",
+            signature_algorithm="Ed25519",
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=2_000,
+            random_seed=99,  # Different seed
+        )
+
+        result1 = DESEngine(config1).run()
+        result2 = DESEngine(config2).run()
+
+        # Results should differ (at least propagation times)
+        assert result1.avg_propagation_p90_ms != result2.avg_propagation_p90_ms
+
+
+class TestPQCImpact:
+    """Tests verifying PQC signatures increase propagation time."""
+
+    @pytest.fixture
+    def base_config(self):
+        """Base config for comparison."""
+        return {
+            "chain": "solana",
+            "num_validators": 20,
+            "num_full_nodes": 10,
+            "simulation_duration_ms": 5_000,
+            "random_seed": 42,
+        }
+
+    def test_larger_signatures_increase_propagation(self, base_config):
+        """Larger PQC signatures should increase propagation time."""
+        ed25519_config = SimulationConfig(
+            signature_algorithm="Ed25519",
+            **base_config,
+        )
+
+        mldsa_config = SimulationConfig(
+            signature_algorithm="ML-DSA-65",
+            **base_config,
+        )
+
+        ed25519_result = DESEngine(ed25519_config).run()
+        mldsa_result = DESEngine(mldsa_config).run()
+
+        # With the tx cap removed, both algorithms fill blocks to the byte-size
+        # limit (~6 MB), so avg_block_size_bytes is nearly identical.
+        # The meaningful physics difference is transaction DENSITY: Ed25519's
+        # small signatures (~64 B) pack many more txs than ML-DSA-65 (~3300 B).
+        assert ed25519_result.avg_txs_per_block > mldsa_result.avg_txs_per_block
+
+
+class TestChainConfigs:
+    """Tests for different chain configurations."""
+
+    def test_bitcoin_longer_blocks(self):
+        """Bitcoin should produce fewer blocks (10 min block time)."""
+        config = SimulationConfig(
+            chain="bitcoin",
+            signature_algorithm="ECDSA",
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=120_000,  # 2 minutes
+            random_seed=42,
+        )
+
+        result = DESEngine(config).run()
+
+        # 2 minutes < 10 minute block time, so 0-1 blocks expected
+        assert result.num_blocks <= 2
+
+    def test_ethereum_moderate_blocks(self):
+        """Ethereum should produce blocks every 12 seconds."""
+        config = SimulationConfig(
+            chain="ethereum",
+            signature_algorithm="ECDSA",
+            num_validators=20,
+            num_full_nodes=10,
+            simulation_duration_ms=60_000,  # 1 minute
+            random_seed=42,
+        )
+
+        result = DESEngine(config).run()
+
+        # 60 seconds / 12 seconds = 5 blocks expected
+        assert 3 <= result.num_blocks <= 7

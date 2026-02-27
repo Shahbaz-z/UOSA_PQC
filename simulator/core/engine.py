@@ -52,243 +52,441 @@ class SimulationConfig:
 
     chain: str                          # "solana", "bitcoin", "ethereum"
     signature_algorithm: str            # "Ed25519", "ML-DSA-65", etc.
-    num_validators: int = 100
-    num_full_nodes: int = 400
-    simulation_duration: float = 600.0  # seconds
+    num_validators: int = 200           # Number of validator nodes
+    num_full_nodes: int = 100           # Number of non-validator full nodes
+    simulation_duration_ms: float = 300_000  # 5 minutes default
     random_seed: int = 42
-    pqc_adoption_fraction: float = 0.0  # fraction of nodes using PQC
-    mempool_eviction: bool = False       # enable economic mempool eviction
+
+    # Chain parameters (if None, uses chain defaults)
+    block_time_ms: Optional[float] = None
+    block_size_limit_bytes: Optional[int] = None
+
+    # Gossip parameters
+    gossip_fanout: int = 8  # Peers to forward to (overridden by chain config)
 
 
 class DESEngine:
-    """Discrete Event Simulation engine."""
+    """Discrete Event Simulation engine for network propagation modeling.
+
+    Models block proposal, propagation, and validation across a network
+    of heterogeneous nodes with realistic bandwidth and CPU constraints.
+
+    The simulation proceeds through discrete events:
+    1. SLOT_TICK: Time boundary, select block proposer
+    2. BLOCK_PROPOSED: Proposer creates and broadcasts block
+    3. BLOCK_PROPAGATED: Node forwards block to gossip peers
+    4. BLOCK_RECEIVED: Node receives block, queues for validation
+    5. BLOCK_VALIDATED: Node validates block, forwards to peers
+
+    Resource contention is modeled using SimPy:
+    - Bandwidth: Transmissions consume NIC capacity
+    - CPU: Verifications consume CPU cores
+    """
 
     def __init__(self, config: SimulationConfig):
+        """Initialize simulation engine.
+
+        Args:
+            config: Simulation configuration.
+        """
         self.config = config
+        self.rng = random.Random(config.random_seed)
+
+        # SimPy environment
         self.env = simpy.Environment()
-        self.state = SimulationState()
-        self.nodes: Dict[str, Node] = {}
-        self.topology: Optional[NetworkTopology] = None
-        self.chain_config: Optional[ChainConfig] = None
-        self._rng = random.Random(config.random_seed)
-        self._block_counter = 0
-        self._tx_counter = 0
-        self._results: List[SimulationResult] = []
 
-    def setup(self) -> None:
-        """Initialize nodes, topology, and chain configuration."""
-        self.chain_config = get_chain_config(self.config.chain)
-        self._setup_nodes()
-        self._setup_topology()
+        # Load chain configuration
+        self.chain_config = get_chain_config(config.chain)
 
-    def _setup_nodes(self) -> None:
-        """Create validator and full nodes with realistic configurations."""
+        # Override chain params if specified
+        self.block_time_ms = config.block_time_ms or self.chain_config.block_time_ms
+        self.block_size_limit = (
+            config.block_size_limit_bytes or self.chain_config.block_size_limit
+        )
+        self.gossip_fanout = config.gossip_fanout or self.chain_config.gossip_fanout
+
+        # Network components
+        self.topology = NetworkTopology(rng=self.rng)
+        self.state = SimulationState(end_time_ms=config.simulation_duration_ms)
+
+        # Event handlers
+        self._handlers: Dict[EventType, Callable[[Event], None]] = {
+            EventType.SLOT_TICK: self._handle_slot_tick,
+            EventType.BLOCK_PROPOSED: self._handle_block_proposed,
+            EventType.BLOCK_PROPAGATED: self._handle_block_propagated,
+            EventType.BLOCK_RECEIVED: self._handle_block_received,
+            EventType.BLOCK_VALIDATED: self._handle_block_validated,
+        }
+
+        # Initialize network
+        self._setup_network()
+
+    def _setup_network(self) -> None:
+        """Create nodes with realistic geographic and hardware distribution."""
+        regions = list(REGIONS.keys())
+        region_weights = region_distribution()
+        region_list = list(region_weights.keys())
+        weights = list(region_weights.values())
+
         # Create validators
         for i in range(self.config.num_validators):
-            region = self._rng.choices(
-                list(REGIONS.keys()),
-                weights=list(region_distribution.values()),
-            )[0]
-            bw_config = sample_validator_config(region, rng=self._rng)
-            node_config = NodeConfig(
+            region = self.rng.choices(region_list, weights=weights)[0]
+            node_config = sample_validator_config(
                 node_id=f"validator_{i}",
-                node_type="validator",
                 region=region,
-                upload_bandwidth_mbps=bw_config.upload_mbps,
-                download_bandwidth_mbps=bw_config.download_mbps,
-                cpu_cores=bw_config.cpu_cores,
-                signature_algorithm=self.config.signature_algorithm,
-                is_pqc=(
-                    self._rng.random() < self.config.pqc_adoption_fraction
-                ),
+                rng=self.rng,
+                is_validator=True,
             )
-            self.nodes[node_config.node_id] = Node(self.env, node_config)
+            node = Node(node_config, self.env)
+            self.topology.add_node(node)
 
         # Create full nodes
         for i in range(self.config.num_full_nodes):
-            region = self._rng.choices(
-                list(REGIONS.keys()),
-                weights=list(region_distribution.values()),
-            )[0]
-            bw_config = sample_full_node_config(region, rng=self._rng)
-            node_config = NodeConfig(
-                node_id=f"full_node_{i}",
-                node_type="full_node",
+            region = self.rng.choices(region_list, weights=weights)[0]
+            node_config = sample_full_node_config(
+                node_id=f"fullnode_{i}",
                 region=region,
-                upload_bandwidth_mbps=bw_config.upload_mbps,
-                download_bandwidth_mbps=bw_config.download_mbps,
-                cpu_cores=bw_config.cpu_cores,
-                signature_algorithm=self.config.signature_algorithm,
-                is_pqc=(
-                    self._rng.random() < self.config.pqc_adoption_fraction
-                ),
+                rng=self.rng,
             )
-            self.nodes[node_config.node_id] = Node(self.env, node_config)
+            node = Node(node_config, self.env)
+            self.topology.add_node(node)
 
-    def _setup_topology(self) -> None:
-        """Build network topology with realistic peer connections."""
-        self.topology = NetworkTopology(
-            nodes=list(self.nodes.values()),
-            rng=self._rng,
+        logger.debug(
+            f"Network initialized: {self.topology.validator_count()} validators, "
+            f"{self.topology.node_count() - self.topology.validator_count()} full nodes"
         )
-        self.topology.build()
 
-    def run(self) -> List[SimulationResult]:
-        """Execute the simulation."""
-        self.setup()
-        self.env.process(self._block_producer())
-        self.env.process(self._tx_generator())
-        self.env.run(until=self.config.simulation_duration)
-        return self._results
+    def run(self) -> SimulationResult:
+        """Execute the simulation and return results.
 
-    def _block_producer(self):
-        """Generate blocks at chain-appropriate intervals."""
-        chain = self.chain_config
-        while True:
-            # Wait for block time with jitter
-            block_interval = self._rng.expovariate(1.0 / chain.block_time_s)
-            yield self.env.timeout(block_interval)
+        Returns:
+            SimulationResult with propagation metrics and stale rate.
+        """
+        logger.info(
+            f"Starting simulation: {self.config.chain}, "
+            f"{self.config.signature_algorithm}, "
+            f"{self.config.simulation_duration_ms}ms"
+        )
 
-            # Select a random validator as block producer
-            validators = [
-                n for n in self.nodes.values() if n.config.node_type == "validator"
-            ]
-            if not validators:
-                continue
-            producer = self._rng.choice(validators)
+        # Schedule initial slot tick
+        self._schedule_initial_events()
 
-            # Build block from mempool
-            block = self._build_block(producer)
-            if block is None:
-                continue
+        # Main event loop
+        events_processed = 0
+        while self.state.has_events():
+            event = self.state.pop_next_event()
 
-            # Record block production time
-            block.produced_at = self.env.now
+            if event.time_ms > self.state.end_time_ms:
+                break
 
-            # Propagate block through network
-            self.env.process(
-                self._propagate_block(producer, block)
+            self.state.current_time_ms = event.time_ms
+
+            # Dispatch to handler
+            handler = self._handlers.get(event.event_type)
+            if handler:
+                handler(event)
+
+            self.state.completed_events.append(event)
+            events_processed += 1
+
+        logger.info(
+            f"Simulation complete: {len(self.state.blocks_proposed)} blocks, "
+            f"{events_processed} events"
+        )
+
+        return self._compute_results()
+
+    def _schedule_initial_events(self) -> None:
+        """Schedule the first slot tick."""
+        proposer = self._select_proposer()
+        self.state.schedule_event(
+            time_ms=0.0,
+            event_type=EventType.SLOT_TICK,
+            payload={"proposer_id": proposer.node_id},
+        )
+
+    def _select_proposer(self) -> Node:
+        """Select next block proposer (stake-weighted for PoS)."""
+        validators = self.topology.get_validators()
+        if not validators:
+            raise RuntimeError("No validators in network")
+
+        weights = [v.config.stake_weight for v in validators]
+        return self.rng.choices(validators, weights=weights)[0]
+
+    # -------------------------------------------------------------------------
+    # Event Handlers
+    # -------------------------------------------------------------------------
+
+    def _handle_slot_tick(self, event: Event) -> None:
+        """Handle slot boundary: trigger block proposal."""
+        proposer_id = event.payload.get("proposer_id")
+
+        # Schedule block proposal
+        self.state.schedule_event(
+            time_ms=self.state.current_time_ms,
+            event_type=EventType.BLOCK_PROPOSED,
+            payload={"proposer_id": proposer_id},
+        )
+
+        # Schedule next slot tick
+        next_slot_time = self.state.current_time_ms + self.block_time_ms
+        if next_slot_time < self.state.end_time_ms:
+            next_proposer = self._select_proposer()
+            self.state.schedule_event(
+                time_ms=next_slot_time,
+                event_type=EventType.SLOT_TICK,
+                payload={"proposer_id": next_proposer.node_id},
             )
 
-    def _build_block(self, producer: Node) -> Optional[Block]:
-        """Construct a block from pending transactions."""
-        pending_txs = self.state.get_pending_transactions()
-        if not pending_txs:
-            return None
+    def _handle_block_proposed(self, event: Event) -> None:
+        """Handle block proposal: create block and start propagation."""
+        proposer_id = event.payload["proposer_id"]
+        proposer = self.topology.get_node(proposer_id)
 
-        chain = self.chain_config
+        # Create block
+        block = self._create_block(proposer)
+        self.state.register_block(block)
 
-        # Fill block to byte-size capacity (no artificial tx cap)
-        selected_txs = []
-        current_size = 0
-        for tx in pending_txs:
-            tx_size = tx.size_bytes
-            if current_size + tx_size > chain.max_block_size_bytes:
-                break
-            selected_txs.append(tx)
-            current_size += tx_size
+        # Proposer immediately has and validates the block (they built it)
+        block.first_seen_by[proposer_id] = self.state.current_time_ms
+        block.validated_by[proposer_id] = self.state.current_time_ms
+        proposer.mark_block_seen(block.block_hash, self.state.current_time_ms)
 
-        if not selected_txs:
-            return None
+        logger.debug(
+            f"Block {block.height} proposed by {proposer_id}: "
+            f"{block.size_bytes} bytes, {block.tx_count} txs"
+        )
 
-        self._block_counter += 1
-        return Block(
-            block_id=f"block_{self._block_counter}",
-            transactions=selected_txs,
-            producer_id=producer.config.node_id,
-            size_bytes=current_size,
+        # Schedule propagation to peers
+        self.state.schedule_event(
+            time_ms=self.state.current_time_ms,
+            event_type=EventType.BLOCK_PROPAGATED,
+            payload={"block_hash": block.block_hash, "sender_id": proposer_id},
+        )
+
+    def _handle_block_propagated(self, event: Event) -> None:
+        """Handle block propagation: send to gossip peers.
+
+        CRITICAL: This models bandwidth contention by computing
+        transmission time based on block size and bottleneck bandwidth.
+        """
+        block_hash = event.payload["block_hash"]
+        sender_id = event.payload["sender_id"]
+        sender = self.topology.get_node(sender_id)
+
+        block = self.state.get_block_by_hash(block_hash)
+        if not block:
+            return
+
+        # Select peers for gossip (exclude those who already have the block)
+        peers = self._select_gossip_peers(sender, block)
+
+        for peer in peers:
+            if peer.has_seen_block(block_hash):
+                continue
+
+            # Compute propagation delay: geographic latency + transmission time
+            # This is where bandwidth contention manifests: larger blocks
+            # take longer to transmit, especially over slow links
+            delay_ms = self.topology.compute_propagation_delay(
+                sender, peer, block.size_bytes
+            )
+
+            receive_time = self.state.current_time_ms + delay_ms
+
+            self.state.schedule_event(
+                time_ms=receive_time,
+                event_type=EventType.BLOCK_RECEIVED,
+                payload={
+                    "block_hash": block_hash,
+                    "receiver_id": peer.node_id,
+                    "sender_id": sender_id,
+                },
+            )
+
+    def _handle_block_received(self, event: Event) -> None:
+        """Handle block receipt: queue for validation.
+
+        CRITICAL: This marks the block as seen and schedules validation.
+        Verification time depends on signature algorithm and signature count.
+        """
+        block_hash = event.payload["block_hash"]
+        receiver_id = event.payload["receiver_id"]
+        receiver = self.topology.get_node(receiver_id)
+
+        block = self.state.get_block_by_hash(block_hash)
+        if not block:
+            return
+
+        # Skip if already seen
+        if receiver.has_seen_block(block_hash):
+            return
+
+        # Record first seen time
+        block.first_seen_by[receiver_id] = self.state.current_time_ms
+        receiver.mark_block_seen(block_hash, self.state.current_time_ms)
+
+        # Schedule validation
+        # Verification time is computed based on:
+        # 1. Signature algorithm (PQC is slower)
+        # 2. Number of signatures in block
+        # 3. Node's processing power
+        # 4. CPU core availability (analytical queuing model)
+        verify_time = receiver.verification_time_ms(
+            block.signature_algorithm,
+            block.total_signatures,
+        )
+
+        # Use CPU scheduling queue: if all cores are busy, queuing adds delay
+        completion_time_ms = receiver.schedule_verification(
+            arrival_time_ms=self.state.current_time_ms,
+            verify_duration_ms=verify_time,
+        )
+
+        self.state.schedule_event(
+            time_ms=completion_time_ms,
+            event_type=EventType.BLOCK_VALIDATED,
+            payload={
+                "block_hash": block_hash,
+                "validator_id": receiver_id,
+            },
+        )
+
+    def _handle_block_validated(self, event: Event) -> None:
+        """Handle block validation: update state and forward to peers."""
+        block_hash = event.payload["block_hash"]
+        validator_id = event.payload["validator_id"]
+
+        block = self.state.get_block_by_hash(block_hash)
+        if not block:
+            return
+
+        # Record validation time
+        block.validated_by[validator_id] = self.state.current_time_ms
+
+        # Forward to peers (continue gossip)
+        self.state.schedule_event(
+            time_ms=self.state.current_time_ms,
+            event_type=EventType.BLOCK_PROPAGATED,
+            payload={"block_hash": block_hash, "sender_id": validator_id},
+        )
+
+    # -------------------------------------------------------------------------
+    # Helper Methods
+    # -------------------------------------------------------------------------
+
+    def _create_block(self, proposer: Node) -> Block:
+        """Create a block filled with transactions."""
+        from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
+
+        # Calculate transaction size with current signature algorithm
+        sig_size = SIGNATURE_SIZES.get(self.config.signature_algorithm, 64)
+        pk_size = PUBLIC_KEY_SIZES.get(self.config.signature_algorithm, 32)
+        tx_overhead = self.chain_config.base_tx_overhead
+        tx_size = tx_overhead + sig_size + pk_size
+
+        # Fill block to capacity
+        max_txs = self.block_size_limit // tx_size
+        # No artificial cap — let Ed25519 fill to true 6 MB capacity
+        # (was previously capped at 10,000 which under-filled small-sig blocks)
+
+        transactions = [
+            Transaction(
+                tx_id=f"tx_{self.state.chain_height + 1}_{i}",
+                size_bytes=tx_size,
+                signature_algorithm=self.config.signature_algorithm,
+                num_signatures=1,
+                fee_satoshis=self.rng.randint(100, 10000),
+                arrival_time_ms=self.state.current_time_ms,
+            )
+            for i in range(max_txs)
+        ]
+
+        block = Block(
+            block_hash=f"block_{self.state.chain_height + 1}",
+            parent_hash=self.state.chain_tip_hash,
+            height=self.state.chain_height + 1,
+            proposer_id=proposer.node_id,
+            timestamp_ms=self.state.current_time_ms,
+            transactions=transactions,
             signature_algorithm=self.config.signature_algorithm,
         )
 
-    def _propagate_block(self, origin: Node, block: Block):
-        """Propagate a block from origin node through the network."""
-        visited = {origin.config.node_id}
-        queue = [(origin, 0.0)]  # (node, arrival_time)
+        return block
 
-        propagation_times = []
+    def _select_gossip_peers(self, sender: Node, block: Block) -> List[Node]:
+        """Select peers for gossip propagation.
 
-        while queue:
-            current_node, arrival_time = queue.pop(0)
+        Excludes nodes that have already seen the block.
+        Uses random selection with configured fanout.
+        """
+        all_nodes = list(self.topology.nodes.values())
+        available = [
+            n for n in all_nodes
+            if n.node_id != sender.node_id
+            and not n.has_seen_block(block.block_hash)
+        ]
 
-            # Schedule verification at this node
-            verify_delay = yield self.env.process(
-                current_node.schedule_verification(block)
-            )
+        if not available:
+            return []
 
-            # Propagate to peers
-            peers = self.topology.get_peers(current_node.config.node_id)
-            for peer in peers:
-                if peer.config.node_id in visited:
-                    continue
-                visited.add(peer.config.node_id)
+        fanout = min(self.gossip_fanout, len(available))
+        return self.rng.sample(available, fanout)
 
-                # Calculate transmission delay
-                tx_delay = self._calc_transmission_delay(
-                    current_node, peer, block.size_bytes
-                )
-                # Calculate network latency
-                net_latency = self.topology.get_latency(
-                    current_node.config.node_id,
-                    peer.config.node_id,
-                )
+    def _compute_results(self) -> SimulationResult:
+        """Compute metrics from completed simulation."""
+        propagation_p50 = []
+        propagation_p90 = []
+        propagation_p95 = []
+        block_sizes = []
+        tx_counts = []
 
-                peer_arrival = arrival_time + verify_delay + tx_delay + net_latency
-                propagation_times.append(peer_arrival)
-                queue.append((peer, peer_arrival))
+        total_nodes = self.topology.node_count()
 
-        # Record propagation statistics
-        if propagation_times:
-            propagation_times.sort()
-            n = len(propagation_times)
-            p50 = propagation_times[int(n * 0.50)]
-            p90 = propagation_times[int(n * 0.90)]
+        for block in self.state.blocks_proposed:
+            p50 = block.propagation_percentile(50)
+            p90 = block.propagation_percentile(90)
+            p95 = block.propagation_percentile(95)
 
-            result = SimulationResult(
-                block_id=block.block_id,
-                produced_at=block.produced_at,
-                num_txs=len(block.transactions),
-                block_size_bytes=block.size_bytes,
-                propagation_p50_ms=p50 * 1000,
-                propagation_p90_ms=p90 * 1000,
-                signature_algorithm=self.config.signature_algorithm,
-                chain=self.config.chain,
-            )
-            self._results.append(result)
+            if p50 is not None:
+                propagation_p50.append(p50)
+            if p90 is not None:
+                propagation_p90.append(p90)
+            if p95 is not None:
+                propagation_p95.append(p95)
 
-            # FIX #1: Use 0.9 × block_time as stale threshold (was 0.5)
-            stale_threshold = self.chain_config.block_time_s * 0.9
-            if p90 > stale_threshold:
-                self.state.record_stale_block(block.block_id)
-                logger.warning(
-                    "Stale block %s: p90=%.3fs > threshold=%.3fs",
-                    block.block_id, p90, stale_threshold,
-                )
+            block_sizes.append(block.size_bytes)
+            tx_counts.append(block.tx_count)
 
-    def _calc_transmission_delay(self, sender: Node, receiver: Node, size_bytes: int) -> float:
-        """Calculate transmission delay based on bandwidth contention."""
-        # Use sender's upload bandwidth (the bottleneck)
-        upload_bps = sender.config.upload_bandwidth_mbps * 1e6 / 8  # bytes per second
-        base_delay = size_bytes / upload_bps
+        # Compute averages
+        avg_p50 = sum(propagation_p50) / len(propagation_p50) if propagation_p50 else 0
+        avg_p90 = sum(propagation_p90) / len(propagation_p90) if propagation_p90 else 0
+        avg_p95 = sum(propagation_p95) / len(propagation_p95) if propagation_p95 else 0
+        avg_block_size = sum(block_sizes) / len(block_sizes) if block_sizes else 0
+        avg_tx_count = sum(tx_counts) / len(tx_counts) if tx_counts else 0
 
-        # Add queuing delay from bandwidth contention
-        queue_delay = sender.get_bandwidth_queue_delay(size_bytes)
-        return base_delay + queue_delay
+        # Compute stale rate
+        # A block is "stale" if propagation p90 exceeds 90% of the block time
+        # (industry standard: a block risks orphaning when it takes almost
+        # the full slot to propagate, not merely half)
+        stale_threshold = self.block_time_ms * 0.9
+        stale_count = sum(1 for p in propagation_p90 if p > stale_threshold)
+        stale_rate = stale_count / len(propagation_p90) if propagation_p90 else 0
 
-    def _tx_generator(self):
-        """Generate transactions at a realistic rate."""
-        chain = self.chain_config
-        while True:
-            # Poisson arrival process
-            inter_arrival = self._rng.expovariate(chain.tx_rate)
-            yield self.env.timeout(inter_arrival)
-
-            self._tx_counter += 1
-            tx = Transaction(
-                tx_id=f"tx_{self._tx_counter}",
-                size_bytes=self._rng.randint(
-                    chain.min_tx_size_bytes, chain.max_tx_size_bytes
-                ),
-                fee=self._rng.uniform(chain.min_fee, chain.max_fee),
-                signature_algorithm=self.config.signature_algorithm,
-            )
-            self.state.add_transaction(tx)
+        return SimulationResult(
+            chain=self.config.chain,
+            signature_algorithm=self.config.signature_algorithm,
+            num_validators=self.config.num_validators,
+            num_full_nodes=self.config.num_full_nodes,
+            simulation_duration_ms=self.config.simulation_duration_ms,
+            num_blocks=len(self.state.blocks_proposed),
+            avg_block_size_bytes=avg_block_size,
+            avg_txs_per_block=avg_tx_count,
+            avg_propagation_p50_ms=avg_p50,
+            avg_propagation_p90_ms=avg_p90,
+            avg_propagation_p95_ms=avg_p95,
+            min_propagation_ms=min(propagation_p90) if propagation_p90 else 0,
+            max_propagation_ms=max(propagation_p90) if propagation_p90 else 0,
+            stale_rate=stale_rate,
+        )
