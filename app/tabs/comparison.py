@@ -7,10 +7,8 @@ import pandas as pd
 
 from pqc_lib.mock import ED25519_PARAMS
 from pqc_lib.signatures import sign_keygen, sign, verify, SIG_ALGORITHMS
-from app.components.charts import side_by_side_dual_axis_chart
-
-
-# Algorithm metadata for display
+from app.components.charts import signature_size_bar_chart, performance_grouped_bar_chart
+from app.utils import format_bytes, throughput_impact_category
 ALGO_INFO = {
     "ML-KEM-512": ("FIPS 203 Level 1 (AES-128 equivalent)", "KEM", "Lattice (MLWE)"),
     "ML-KEM-768": ("FIPS 203 Level 3 (AES-192 equivalent)", "KEM", "Lattice (MLWE)"),
@@ -32,31 +30,12 @@ ALGO_INFO = {
 }
 
 
-def _format_bytes(n: int) -> str:
-    """Human-readable byte size."""
-    if n >= 1024:
-        return f"{n:,} B ({n / 1024:.1f} KB)"
-    return f"{n:,} B"
-
-
-def _throughput_impact_category(ratio: float) -> str:
-    """Categorize throughput impact for educational display."""
-    if ratio >= 0.9:
-        return ":green[Minimal Impact]"
-    elif ratio >= 0.7:
-        return ":orange[Moderate Impact]"
-    elif ratio >= 0.4:
-        return ":red[Significant Impact]"
-    else:
-        return ":red[Severe Impact]"
-
-
 def render(tab) -> None:
     """Render the Side-by-Side Comparison tab."""
     with tab:
         st.header("Side-by-Side Algorithm Comparison")
 
-        with st.expander("How to use this tool", expanded=False):
+        with st.expander("How to use this tool", expanded=True):
             st.markdown(
                 "1. Select **2 or more** signature algorithms to compare\n"
                 "2. Optionally change the test message\n"
@@ -103,7 +82,7 @@ def render(tab) -> None:
             results = st.session_state["compare_results"]
 
             # Metric cards for quick overview
-            st.markdown("##### Quick Overview")
+            st.subheader("Quick Overview")
             metric_cols = st.columns(min(len(results), 4))
             for i, (algo, r) in enumerate(results.items()):
                 with metric_cols[i % len(metric_cols)]:
@@ -111,17 +90,17 @@ def render(tab) -> None:
                     algo_info = ALGO_INFO.get(algo.replace("Hybrid-Ed25519+", ""))
                     if algo_info:
                         st.caption(algo_info[2])
-                    st.metric("Signature", _format_bytes(r["sr"].signature_size))
+                    st.metric("Signature", format_bytes(r["sr"].signature_size))
                     ratio = r["sr"].signature_size / ED25519_PARAMS["signature"]
                     if ratio > 1.5:
-                        st.caption(f"{ratio:.1f}x Ed25519 | {_throughput_impact_category(1 / ratio)}")
+                        st.caption(f"{ratio:.1f}x Ed25519 | {throughput_impact_category(1 / ratio)}")
                     elif ratio == 1.0:
                         st.caption("(baseline)")
 
-            st.markdown("---")
+            st.divider()
 
             # Detailed table
-            st.markdown("##### Detailed Comparison")
+            st.subheader("Detailed Comparison")
             rows = []
             for algo, r in results.items():
                 rows.append({
@@ -139,9 +118,13 @@ def render(tab) -> None:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
             # Charts
-            st.markdown("##### Visual Comparison")
+            st.subheader("Visual Comparison")
             sig_results = {algo: r["sr"] for algo, r in results.items()}
-            st.plotly_chart(side_by_side_dual_axis_chart(sig_results), use_container_width=True)
+            chart_c1, chart_c2 = st.columns(2)
+            with chart_c1:
+                st.plotly_chart(signature_size_bar_chart(sig_results), use_container_width=True)
+            with chart_c2:
+                st.plotly_chart(performance_grouped_bar_chart(results), use_container_width=True)
 
             # Download
             dl_df = pd.DataFrame([

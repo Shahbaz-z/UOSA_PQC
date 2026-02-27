@@ -10,31 +10,7 @@ from blockchain.chain_models import (
     SIGNATURE_SIZES,
     SOLANA_VOTE_TX_PCT_REALISTIC,
 )
-
-
-def _threat_badge(level: str) -> str:
-    """Return a colored threat level badge in markdown."""
-    colors = {"HIGH": "red", "MODERATE-HIGH": "orange", "MODERATE": "orange", "LOW": "green"}
-    return f":{colors.get(level, 'gray')}[**{level}**]"
-
-
-def _format_bytes(n: int) -> str:
-    """Human-readable byte size."""
-    if n >= 1024:
-        return f"{n:,} B ({n / 1024:.1f} KB)"
-    return f"{n:,} B"
-
-
-def _throughput_impact_category(ratio: float) -> str:
-    """Categorize throughput impact for educational display."""
-    if ratio >= 0.9:
-        return ":green[Minimal Impact]"
-    elif ratio >= 0.7:
-        return ":orange[Moderate Impact]"
-    elif ratio >= 0.4:
-        return ":red[Significant Impact]"
-    else:
-        return ":red[Severe Impact]"
+from app.utils import format_bytes, throughput_impact_category, threat_badge
 
 
 def render(tab, chain_quantum_context: dict) -> None:
@@ -62,9 +38,9 @@ def render(tab, chain_quantum_context: dict) -> None:
             chain_quantum_context.items(),
         ):
             with col:
-                st.markdown(f"### {chain_name}")
+                st.subheader(chain_name)
                 st.markdown(f"**Current:** {ctx['current_sig']}")
-                st.markdown(f"**Threat:** {_threat_badge(ctx['quantum_threat'])}")
+                st.markdown(f"**Threat:** {threat_badge(ctx['quantum_threat'])}")
                 st.markdown(f"**Best PQC:** {ctx['recommended_pqc']}")
                 st.caption(ctx["recommendation_reason"])
 
@@ -140,14 +116,14 @@ def render(tab, chain_quantum_context: dict) -> None:
                     st.markdown(f"**Best PQC: {best.signature_type}**")
                     st.markdown(f"- Retains **{best.relative_to_baseline:.1%}** of baseline throughput")
                     st.markdown(f"- {best.throughput_tps:,.1f} TPS ({best.txs_per_block:,} txs/block)")
-                    st.markdown(f"- Signature: {_format_bytes(best.signature_bytes)}")
-                    st.markdown(f"- Impact: {_throughput_impact_category(best.relative_to_baseline)}")
+                    st.markdown(f"- Signature: {format_bytes(best.signature_bytes)}")
+                    st.markdown(f"- Impact: {throughput_impact_category(best.relative_to_baseline)}")
                 with b2:
                     st.markdown(f"**Worst PQC: {worst.signature_type}**")
                     st.markdown(f"- Retains **{worst.relative_to_baseline:.1%}** of baseline throughput")
                     st.markdown(f"- {worst.throughput_tps:,.1f} TPS ({worst.txs_per_block:,} txs/block)")
-                    st.markdown(f"- Signature: {_format_bytes(worst.signature_bytes)}")
-                    st.markdown(f"- Impact: {_throughput_impact_category(worst.relative_to_baseline)}")
+                    st.markdown(f"- Signature: {format_bytes(worst.signature_bytes)}")
+                    st.markdown(f"- Impact: {throughput_impact_category(worst.relative_to_baseline)}")
 
         # Download cross-chain summary
         st.divider()

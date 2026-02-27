@@ -7,7 +7,6 @@ from typing import List
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 from blockchain.chain_models import BlockAnalysis
 
@@ -145,57 +144,61 @@ def signature_size_comparison(analyses: List[BlockAnalysis], chain: str = "Solan
     return fig
 
 
-def side_by_side_dual_axis_chart(results: dict) -> go.Figure:
-    """Dual-axis comparison chart: signature size (left axis) and sign time (right axis).
-
-    Uses separate y-axes so bytes and milliseconds are not conflated on a single scale.
+def signature_size_bar_chart(results: dict) -> go.Figure:
+    """Horizontal bar chart: signature sizes on a log scale with FAMILY_COLORS.
 
     *results*: dict mapping algorithm name to SignResult-like objects
-    with .signature_size and .time_ms attributes.
+    with .signature_size attribute.
     """
     algos = list(results.keys())
     sizes = [results[a].signature_size for a in algos]
-    times = [results[a].time_ms for a in algos]
     colors = [_get_color(a) for a in algos]
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    fig.add_trace(
-        go.Bar(
-            name="Signature Size (bytes)",
-            x=algos,
-            y=sizes,
-            marker_color=colors,
-            opacity=0.8,
-            text=[f"{s:,} B" for s in sizes],
-            textposition="outside",
-        ),
-        secondary_y=False,
+    fig = go.Figure(go.Bar(
+        y=algos,
+        x=sizes,
+        orientation="h",
+        marker_color=colors,
+        text=[f"{s:,} B" for s in sizes],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        title="Signature Size Comparison",
+        xaxis_title="Signature Size (bytes, log scale)",
+        xaxis_type="log",
+        yaxis={"categoryorder": "total ascending"},
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=12),
+        title_font_size=16,
+        height=max(300, len(algos) * 45),
     )
+    return fig
 
-    fig.add_trace(
-        go.Scatter(
-            name="Sign Time (ms)",
-            x=algos,
-            y=times,
-            mode="lines+markers+text",
-            marker=dict(size=10, color="tomato"),
-            line=dict(color="tomato", width=2),
-            text=[f"{t:.3f}" for t in times],
-            textposition="top center",
-        ),
-        secondary_y=True,
-    )
+
+def performance_grouped_bar_chart(results: dict) -> go.Figure:
+    """Grouped bar chart: keygen / sign / verify times per algorithm.
+
+    *results*: dict mapping algorithm name to dict with 'kp', 'sr', 'vr' keys,
+    each having keygen_time_ms, time_ms attributes.
+    """
+    algos = list(results.keys())
+    keygen = [results[a]["kp"].keygen_time_ms for a in algos]
+    sign_t = [results[a]["sr"].time_ms for a in algos]
+    verify = [results[a]["vr"].time_ms for a in algos]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Keygen (ms)", x=algos, y=keygen, marker_color="#1f77b4"))
+    fig.add_trace(go.Bar(name="Sign (ms)", x=algos, y=sign_t, marker_color="#ff7f0e"))
+    fig.add_trace(go.Bar(name="Verify (ms)", x=algos, y=verify, marker_color="#2ca02c"))
 
     fig.update_layout(
-        title="Algorithm Comparison: Signature Size vs Sign Time",
+        title="Performance Comparison: Keygen / Sign / Verify",
+        yaxis_title="Time (ms)",
+        barmode="group",
         plot_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis_tickangle=-45,
         font=dict(size=12),
         title_font_size=16,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig.update_yaxes(title_text="Signature Size (bytes)", secondary_y=False)
-    fig.update_yaxes(title_text="Sign Time (ms)", secondary_y=True)
-
     return fig
