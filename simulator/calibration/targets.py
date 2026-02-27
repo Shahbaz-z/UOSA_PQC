@@ -2,6 +2,24 @@
 
 The simulator must match these baseline metrics with classical signatures
 before injecting PQC transactions in Phase 2.
+
+=== AWS Inter-Region Latency (RTT, ms) ===
+Source: CloudPing.co — https://www.cloudping.co (Feb 2026)
+Updated per Phase 2 live data ingestion.
+
+=== PQC Verification Benchmarks ===
+Sources:
+  - wolfSSL/liboqs on Intel i7-8700 @ 3.20GHz, AVX2
+    (https://www.wolfssl.com/documentation/manuals/wolfssl/appendix07.html)
+    ML-DSA-44 verify: 54 µs  (18,403 ops/sec)
+    ML-DSA-65 verify: 87 µs  (11,544 ops/sec)
+    ML-DSA-87 verify: 140 µs (7,152 ops/sec)
+  - Cloudflare PQC blog (Nov 2024)
+    (https://blog.cloudflare.com/another-look-at-pq-signatures/)
+    SLH-DSA-128f verification ≈ 110× ML-DSA-44 baseline → ~5,940 µs
+  - TechRxiv — PQC for Verifiable Credentials
+    (https://www.techrxiv.org/users/973090/articles/1346363)
+    ML-DSA-65 verify: 47.9 µs (close agreement with wolfSSL)
 """
 
 from __future__ import annotations
@@ -90,6 +108,48 @@ CALIBRATION_TARGETS: Dict[str, Dict[str, CalibrationTarget]] = {
     "solana": SOLANA_TARGETS,
     "bitcoin": BITCOIN_TARGETS,
     "ethereum": ETHEREUM_TARGETS,
+}
+
+
+# ---------------------------------------------------------------------------
+# AWS CloudPing inter-region latency constants (Feb 2026)
+# Source: https://www.cloudping.co  (live RTT matrix)
+# Also cross-referenced with:
+#   https://dev.to/aws-builders/looking-at-aws-inter-region-latency-through-distance-34eh
+# ---------------------------------------------------------------------------
+AWS_CLOUDPING_RTT_MS: Dict[str, Dict[str, float]] = {
+    "us-east-1": {
+        "us-west-2": 61.0, "eu-west-1": 69.7, "eu-central-1": 92.9,
+        "ap-northeast-1": 151.5, "ap-southeast-1": 226.0,
+        "ap-south-1": 185.9, "sa-east-1": 113.3, "af-south-1": 228.8,
+    },
+    "us-west-2": {
+        "eu-west-1": 128.6, "eu-central-1": 152.8,
+        "ap-northeast-1": 108.4, "ap-southeast-1": 170.7,
+        "ap-south-1": 232.5, "sa-east-1": 173.9, "af-south-1": 288.5,
+    },
+    "eu-west-1": {
+        "eu-central-1": 21.7, "ap-northeast-1": 203.3,
+        "ap-southeast-1": 175.4, "ap-south-1": 121.8,
+        "sa-east-1": 178.7, "af-south-1": 156.1,
+    },
+    "eu-central-1": {
+        "ap-northeast-1": 225.9, "ap-southeast-1": 160.2,
+        "ap-south-1": 131.2, "sa-east-1": 203.7, "af-south-1": 156.9,
+    },
+    "ap-northeast-1": {
+        "ap-southeast-1": 69.0, "ap-south-1": 128.1,
+        "sa-east-1": 260.5, "af-south-1": 296.1,
+    },
+    "ap-southeast-1": {
+        "ap-south-1": 62.4, "sa-east-1": 329.1, "af-south-1": 214.2,
+    },
+    "ap-south-1": {
+        "sa-east-1": 296.9, "af-south-1": 180.7,
+    },
+    "sa-east-1": {
+        "af-south-1": 338.3,
+    },
 }
 
 

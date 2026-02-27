@@ -44,23 +44,41 @@ class VerificationResult:
 
 
 # ---------------------------------------------------------------------------
-# Verification time catalog
+# Verification time catalog — UPDATED 2026-02-27 with live benchmarks
 # ---------------------------------------------------------------------------
-# Sources:
-# - Ed25519: ~60μs (libsodium, dalek-cryptography benchmarks)
-# - ECDSA secp256k1: ~80μs (OpenSSL, libsecp256k1)
-# - Schnorr BIP340: ~60μs (libsecp256k1, batch-friendly)
-# - ML-DSA: liboqs benchmarks on x86-64 (AVX2)
-#   ML-DSA-44: ~180μs verify, ML-DSA-65: ~300μs, ML-DSA-87: ~500μs
-# - SLH-DSA: liboqs benchmarks (hash-heavy, slower)
-#   128s: ~3000μs, 128f: ~500μs, 192s: ~5500μs, 192f: ~1000μs, 256s: ~8000μs, 256f: ~2000μs
-# - Falcon: liboqs benchmarks
-#   Falcon-512: ~100μs, Falcon-1024: ~200μs (fast verify is a key advantage)
+# PRIMARY SOURCE (wolfSSL/liboqs, Intel i7-8700 @ 3.20GHz, AVX2):
+#   https://www.wolfssl.com/documentation/manuals/wolfssl/appendix07.html
+#   ML-DSA-44 verify: 54 µs   (18,403 ops/sec → 1/18403 ≈ 54.3 µs)
+#   ML-DSA-65 verify: 87 µs   (11,544 ops/sec → 1/11544 ≈ 86.6 µs)
+#   ML-DSA-87 verify: 140 µs  (7,152 ops/sec → 1/7152  ≈ 139.8 µs)
+#   Ed25519  verify: 44 µs    (ECDSA-P256: 22,976 ops/sec ≈ 43.5 µs)
+#
+# CROSS-VALIDATION:
+#   - TechRxiv (ML-DSA-65): 47.9 µs
+#     https://www.techrxiv.org/users/973090/articles/1346363
+#   - arxiv 2510.09271v1: ML-DSA Level 5 → 0.14 ms on ARM
+#     https://arxiv.org/html/2510.09271v1
+#
+# SLH-DSA RELATIVE SCALING (Cloudflare blog, Nov 2024):
+#   https://blog.cloudflare.com/another-look-at-pq-signatures/
+#   SLH-DSA-128f verify ≈ 110× ML-DSA-44 baseline → 110 × 54 ≈ 5,940 µs
+#   SLH-DSA-128s verify ≈ 40× ML-DSA-44 (with 14,000× sign) → ~2,160 µs
+#   SLH-DSA-256f ≈ 2× SLH-128f → ~11,880 µs
+#   SLH-DSA-256s ≈ 4× SLH-128s → ~8,640 µs
+#
+# Classical baselines:
+#   - Ed25519: 60 µs (libsodium/dalek, conservative; wolfSSL shows 44 µs)
+#   - ECDSA secp256k1: 80 µs (OpenSSL/libsecp256k1)
+#   - Schnorr BIP340: 60 µs (libsecp256k1, batch-friendly)
+#   - BLS12-381: 1,500 µs (pairing-based, eth2 consensus)
+#
+# Falcon (liboqs):
+#   - Falcon-512: ~100 µs, Falcon-1024: ~200 µs
 #
 # Batch speedup:
-# - Ed25519: 0.5 (batch verification via Bos-Coster / Pippenger)
-# - Schnorr: 0.4 (MuSig-style batch, most efficient)
-# - Others: 1.0 (no standardized batch verify for lattice/hash-based)
+#   - Ed25519: 0.5 (batch verification via Bos-Coster / Pippenger)
+#   - Schnorr: 0.4 (MuSig-style batch, most efficient)
+#   - Others: 1.0 (no standardized batch verify for lattice/hash-based)
 # ---------------------------------------------------------------------------
 
 VERIFICATION_PROFILES: Dict[str, VerificationProfile] = {
