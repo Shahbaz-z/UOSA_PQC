@@ -1,18 +1,9 @@
 """Phase 2/3 DES Engine: Stochastic PQC Shock + Economic Mempool Eviction.
 
-Extends the Phase 1 DESEngine with:
-  1. PoissonArrivalModel for stochastic transaction generation
-  2. GlobalMempool with bounded capacity and fee-rate eviction
-  3. AlgorithmMix for heterogeneous classical + PQC signature blocks
-  4. Per-transaction verification loop that locks CPU resources for
-     each signature's specific verification time
-
-CRITICAL PHYSICS CONSTRAINT:
-  When verifying a heterogeneous block, each transaction is iterated
-  individually. The SimPy Resource (cpu_cores) is held for the EXACT
-  verification time of that transaction's specific signature algorithm.
-  This means an SLH-DSA-128f signature (5,940 µs) physically blocks
-  a CPU core 100× longer than an Ed25519 signature (60 µs).
+Extends the Phase 1 DES engine with:
+1. Stochastic PQC adoption shock (gradual or sudden transition)
+2. Economic mempool eviction (fee-based priority queue)
+3. Monte Carlo sweep support
 """
 
 from __future__ import annotations
@@ -20,386 +11,255 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Optional, Tuple
 import simpy
+import numpy as np
 
 from simulator.core.engine import DESEngine, SimulationConfig
-from simulator.core.events import EventType, Event
-from simulator.state import SimulationState
-from simulator.results import SimulationResult
-from simulator.network.node import Node
+from simulator.network.node import Node, NodeConfig
 from simulator.network.propagation import Block, Transaction
-from simulator.mempool import PoissonArrivalModel
-from simulator.mempool.mempool import GlobalMempool
-from simulator.mempool.algorithm_mix import AlgorithmMixGenerator, AlgorithmMixConfig
-from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
-from blockchain.verification import VERIFICATION_PROFILES
+from simulator.results import SimulationResult
+from simulator.models.bandwidth import (
+    sample_validator_config,
+    sample_full_node_config,
+    region_distribution,
+)
+from simulator.network.topology import REGIONS
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class Phase2Config:
-    """Configuration for Phase 2/3 extensions on top of SimulationConfig.
+    """Additional config for Phase 2/3 simulation."""
 
-    Attributes:
-        pqc_fraction: Fraction of transactions using PQC [0.0, 1.0].
-        lambda_tps: Poisson arrival rate (transactions per second).
-        mempool_capacity_bytes: Bounded mempool size in bytes.
-        pqc_weights: Relative weights for PQC algorithm sub-selection.
-        classical_algo: Classical baseline signature algorithm.
-    """
-    chain: str
-    pqc_fraction: float = 0.0
-    lambda_tps: float = 500.0
-    mempool_capacity_bytes: int = 100 * 1024 * 1024  # 100 MB
-    classical_algo: str = "Ed25519"
-    pqc_weights: Optional[Dict[str, float]] = None
+    # PQC shock parameters
+    pqc_shock_start: float = 100.0      # simulation time when PQC shock begins
+    pqc_shock_duration: float = 200.0   # duration of transition period
+    pqc_shock_type: str = "gradual"      # "gradual" or "sudden"
+    target_pqc_fraction: float = 1.0    # final PQC adoption fraction
 
-    # Simulation parameters
-    num_validators: int = 50
-    num_full_nodes: int = 25
-    simulation_duration_ms: float = 60_000  # 1 minute
-    random_seed: int = 42
+    # Economic mempool eviction
+    mempool_max_size: int = 50_000      # max transactions in mempool
+    eviction_policy: str = "fee"        # "fee" or "fifo"
 
-    # Override chain block time / size if desired
-    block_time_ms: Optional[float] = None
-    block_size_limit_bytes: Optional[int] = None
+    # Monte Carlo
+    num_monte_carlo_runs: int = 10
+    mc_seeds: Optional[List[int]] = None
 
 
-class Phase2Engine:
-    """Phase 2/3 Simulation Engine with heterogeneous PQC transactions.
+class Phase2Engine(DESEngine):
+    """Phase 2/3 DES engine with PQC shock and mempool eviction."""
 
-    Extends the Phase 1 propagation engine with:
-    - Poisson transaction arrivals filling a bounded mempool
-    - Fee-rate-based eviction under mempool pressure
-    - Heterogeneous signature blocks (mixed classical + PQC)
-    - Per-transaction verification with CPU resource locking
+    def __init__(self, config: SimulationConfig, phase2_config: Phase2Config):
+        super().__init__(config)
+        self.p2_config = phase2_config
+        self._pqc_fraction_current = config.pqc_adoption_fraction
+        self._mempool_evictions = 0
 
-    The core event loop remains the same (SLOT_TICK → BLOCK_PROPOSED →
-    BLOCK_PROPAGATED → BLOCK_RECEIVED → BLOCK_VALIDATED), but block
-    creation now pulls from the mempool and verification iterates
-    each transaction individually.
-    """
+    def run(self) -> List[SimulationResult]:
+        """Execute the Phase 2 simulation with shock and eviction."""
+        self.setup()
+        self.env.process(self._block_producer())
+        self.env.process(self._tx_generator())
+        self.env.process(self._pqc_shock_driver())
+        self.env.run(until=self.config.simulation_duration)
+        return self._results
 
-    def __init__(self, config: Phase2Config) -> None:
-        self.config = config
-        self.rng = random.Random(config.random_seed)
+    def _pqc_shock_driver(self):
+        """Drive PQC adoption shock over time."""
+        p2 = self.p2_config
 
-        # Build SimulationConfig for the underlying Phase 1 engine
-        self._sim_config = SimulationConfig(
-            chain=config.chain,
-            signature_algorithm=config.classical_algo,
-            num_validators=config.num_validators,
-            num_full_nodes=config.num_full_nodes,
-            simulation_duration_ms=config.simulation_duration_ms,
-            random_seed=config.random_seed,
-            block_time_ms=config.block_time_ms,
-            block_size_limit_bytes=config.block_size_limit_bytes,
-        )
+        # Wait until shock starts
+        yield self.env.timeout(p2.pqc_shock_start)
+        logger.info("PQC shock starting at t=%.1f", self.env.now)
 
-        # Construct the Phase 1 engine (network, topology, state)
-        self._engine = DESEngine(self._sim_config)
-
-        # Phase 2 components
-        self._arrival_model = PoissonArrivalModel(
-            lambda_tps=config.lambda_tps,
-            rng=random.Random(config.random_seed + 1),
-        )
-
-        self._mempool = GlobalMempool(
-            capacity_bytes=config.mempool_capacity_bytes,
-        )
-
-        mix_config = AlgorithmMixConfig(
-            pqc_fraction=config.pqc_fraction,
-            classical_algo=config.classical_algo,
-            pqc_weights=config.pqc_weights,
-        )
-        self._algo_mix = AlgorithmMixGenerator(
-            config=mix_config,
-            rng=random.Random(config.random_seed + 2),
-        )
-
-        # Metrics accumulators
-        self._blocks_produced: List[Block] = []
-        self._total_evictions: int = 0
-        self._total_tx_generated: int = 0
-        self._verification_times_ms: List[float] = []
-
-    def run(self) -> Dict:
-        """Execute the Phase 2/3 simulation.
-
-        Returns:
-            Dictionary with comprehensive simulation results including
-            propagation, verification, mempool, and failure metrics.
-        """
-        # Pre-fill mempool with transactions arriving before first block
-        self._generate_transactions_until(self._engine.block_time_ms)
-
-        # Run the event loop with Phase 2 overrides
-        self._engine._create_block = self._create_heterogeneous_block  # type: ignore
-
-        # Monkey-patch the block verification to use per-tx iteration
-        original_handle_received = self._engine._handle_block_received
-
-        def patched_handle_received(event: Event) -> None:
-            """Override: use per-transaction verification times."""
-            block_hash = event.payload["block_hash"]
-            receiver_id = event.payload["receiver_id"]
-            receiver = self._engine.topology.get_node(receiver_id)
-
-            block = self._engine.state.get_block_by_hash(block_hash)
-            if not block or receiver.has_seen_block(block_hash):
-                return
-
-            block.first_seen_by[receiver_id] = self._engine.state.current_time_ms
-            receiver.mark_block_seen(block_hash, self._engine.state.current_time_ms)
-
-            # CRITICAL: Per-transaction heterogeneous verification
-            verify_time = self._compute_heterogeneous_verify_time(
-                block, receiver
-            )
-
-            self._engine.state.schedule_event(
-                time_ms=self._engine.state.current_time_ms + verify_time,
-                event_type=EventType.BLOCK_VALIDATED,
-                payload={
-                    "block_hash": block_hash,
-                    "validator_id": receiver_id,
-                },
-            )
-
-        self._engine._handle_block_received = patched_handle_received  # type: ignore
-        self._engine._handlers[EventType.BLOCK_RECEIVED] = patched_handle_received
-
-        # Patch SLOT_TICK to also generate transactions between blocks
-        original_handle_slot = self._engine._handle_slot_tick
-
-        def patched_handle_slot(event: Event) -> None:
-            # Generate transactions that arrived during this slot interval
-            self._generate_transactions_until(
-                self._engine.block_time_ms
-            )
-            original_handle_slot(event)
-
-        self._engine._handle_slot_tick = patched_handle_slot  # type: ignore
-        self._engine._handlers[EventType.SLOT_TICK] = patched_handle_slot
-
-        # Run the engine
-        result = self._engine.run()
-
-        # Compute Phase 2/3 extended metrics
-        return self._compute_phase2_results(result)
-
-    def _generate_transactions_until(self, interval_ms: float) -> None:
-        """Generate Poisson-arriving transactions for the given interval.
-
-        Fills the mempool with transactions, each with a randomly sampled
-        signature algorithm according to the AlgorithmMix distribution.
-        """
-        elapsed_ms = 0.0
-        base_overhead = self._engine.chain_config.base_tx_overhead
-
-        while elapsed_ms < interval_ms:
-            inter_arrival = self._arrival_model.next_inter_arrival_ms()
-            elapsed_ms += inter_arrival
-            if elapsed_ms >= interval_ms:
-                break
-
-            # Sample algorithm for this transaction
-            algo = self._algo_mix.sample()
-            tx_size = self._algo_mix.tx_size_bytes(algo, base_overhead)
-
-            tx = Transaction(
-                tx_id=f"tx_{self._total_tx_generated}",
-                size_bytes=tx_size,
-                signature_algorithm=algo,
-                num_signatures=1,
-                fee_satoshis=self.rng.randint(100, 50_000),
-                arrival_time_ms=self._engine.state.current_time_ms + elapsed_ms,
-            )
-
-            accepted, evicted = self._mempool.add_transaction(tx)
-            self._total_evictions += len(evicted)
-            self._total_tx_generated += 1
-
-    def _create_heterogeneous_block(self, proposer: Node) -> Block:
-        """Create a block from mempool with heterogeneous signatures.
-
-        Pulls the highest-fee-rate transactions from the mempool up to
-        the block size limit. This replaces the Phase 1 uniform-fill logic.
-        """
-        max_block_size = self._engine.block_size_limit
-        max_txs = 10_000  # Cap for simulation performance
-
-        # Select transactions from mempool
-        candidates = self._mempool.get_block_candidates(
-            max_block_size_bytes=max_block_size,
-            max_txs=max_txs,
-        )
-
-        # Remove selected transactions from mempool
-        for tx in candidates:
-            self._mempool.remove_transaction(tx.tx_id)
-
-        # If mempool is empty, create a minimal block
-        if not candidates:
-            # Generate at least one transaction
-            algo = self._algo_mix.sample()
-            base_overhead = self._engine.chain_config.base_tx_overhead
-            tx_size = self._algo_mix.tx_size_bytes(algo, base_overhead)
-            candidates = [
-                Transaction(
-                    tx_id=f"tx_filler_{self._engine.state.chain_height + 1}",
-                    size_bytes=tx_size,
-                    signature_algorithm=algo,
-                    num_signatures=1,
-                    fee_satoshis=self.rng.randint(100, 10_000),
-                    arrival_time_ms=self._engine.state.current_time_ms,
+        if p2.pqc_shock_type == "sudden":
+            # Instant transition
+            self._apply_pqc_fraction(p2.target_pqc_fraction)
+            yield self.env.timeout(0)
+        else:
+            # Gradual transition over shock_duration
+            steps = 20
+            dt = p2.pqc_shock_duration / steps
+            for step in range(steps + 1):
+                frac = step / steps
+                target = (
+                    self._pqc_fraction_current
+                    + frac * (p2.target_pqc_fraction - self._pqc_fraction_current)
                 )
-            ]
+                self._apply_pqc_fraction(target)
+                yield self.env.timeout(dt)
 
-        # Determine the "primary" signature algorithm for the block
-        # (most common algorithm in the block, for metadata)
-        algo_counts: Dict[str, int] = {}
-        for tx in candidates:
-            algo_counts[tx.signature_algorithm] = algo_counts.get(
-                tx.signature_algorithm, 0
-            ) + 1
-        primary_algo = max(algo_counts, key=algo_counts.get)  # type: ignore
+        logger.info("PQC shock complete at t=%.1f", self.env.now)
 
-        block = Block(
-            block_hash=f"block_{self._engine.state.chain_height + 1}",
-            parent_hash=self._engine.state.chain_tip_hash,
-            height=self._engine.state.chain_height + 1,
-            proposer_id=proposer.node_id,
-            timestamp_ms=self._engine.state.current_time_ms,
-            transactions=candidates,
-            signature_algorithm=primary_algo,
-        )
-
-        self._blocks_produced.append(block)
-        return block
-
-    def _compute_heterogeneous_verify_time(
-        self, block: Block, node: Node
-    ) -> float:
-        """Compute verification time iterating each transaction individually.
-
-        CRITICAL PHYSICS CONSTRAINT:
-        Each transaction's signature is verified sequentially on a per-core
-        basis. The total time is the sum of individual verification times
-        divided by the node's CPU cores (parallel verification across cores).
-
-        For a heterogeneous block:
-          total_serial_us = Σ verify_time_us(tx.signature_algorithm)
-          total_parallel_ms = total_serial_us / (cpu_cores × processing_factor × 1000)
-        """
-        total_serial_us = 0.0
-
-        for tx in block.transactions:
-            profile = VERIFICATION_PROFILES.get(tx.signature_algorithm)
-            if profile:
-                total_serial_us += profile.verify_time_us * tx.num_signatures
+    def _apply_pqc_fraction(self, fraction: float) -> None:
+        """Update what fraction of nodes use PQC signatures."""
+        self._pqc_fraction_current = fraction
+        all_nodes = list(self.nodes.values())
+        self._rng.shuffle(all_nodes)
+        cutoff = int(len(all_nodes) * fraction)
+        for i, node in enumerate(all_nodes):
+            node.config.is_pqc = i < cutoff
+            if node.config.is_pqc:
+                node.config.signature_algorithm = self.config.signature_algorithm
             else:
-                # Unknown algo: conservative 500 µs/sig
-                total_serial_us += 500.0 * tx.num_signatures
+                node.config.signature_algorithm = "Ed25519"
 
-        # Parallelize across CPU cores, adjusted for processing power
-        effective_cores = (
-            node.config.cpu_cores * node.config.processing_power_factor
+    def _build_block(self, producer: Node) -> Optional[Block]:
+        """Build block with economic fee-priority ordering."""
+        pending_txs = self.state.get_pending_transactions()
+        if not pending_txs:
+            return None
+
+        chain = self.chain_config
+
+        # Sort by fee (highest first) for economic ordering
+        if self.p2_config.eviction_policy == "fee":
+            pending_txs = sorted(pending_txs, key=lambda t: t.fee, reverse=True)
+
+        # Fill block to byte-size capacity (no artificial tx cap)
+        selected_txs = []
+        current_size = 0
+        for tx in pending_txs:
+            tx_size = tx.size_bytes
+            if current_size + tx_size > chain.max_block_size_bytes:
+                break
+            selected_txs.append(tx)
+            current_size += tx_size
+
+        if not selected_txs:
+            return None
+
+        # Apply mempool eviction if over limit
+        if len(pending_txs) > self.p2_config.mempool_max_size:
+            # Evict lowest-fee transactions
+            evict_count = len(pending_txs) - self.p2_config.mempool_max_size
+            if self.p2_config.eviction_policy == "fee":
+                to_evict = sorted(pending_txs, key=lambda t: t.fee)[:evict_count]
+            else:
+                to_evict = pending_txs[-evict_count:]
+            for tx in to_evict:
+                self.state.remove_transaction(tx.tx_id)
+            self._mempool_evictions += evict_count
+
+        self._block_counter += 1
+        return Block(
+            block_id=f"block_{self._block_counter}",
+            transactions=selected_txs,
+            producer_id=producer.config.node_id,
+            size_bytes=current_size,
+            signature_algorithm=self.config.signature_algorithm,
         )
-        if effective_cores <= 0:
-            effective_cores = 1.0
 
-        total_parallel_us = total_serial_us / effective_cores
-        total_ms = total_parallel_us / 1000.0
+    def _propagate_block(self, origin: Node, block: Block):
+        """Propagate block and record Phase 2 statistics."""
+        visited = {origin.config.node_id}
+        queue = [(origin, 0.0)]
+        propagation_times = []
 
-        self._verification_times_ms.append(total_ms)
-        return total_ms
+        while queue:
+            current_node, arrival_time = queue.pop(0)
+            verify_delay = yield self.env.process(
+                current_node.schedule_verification(block)
+            )
 
-    def _compute_phase2_results(self, base_result: SimulationResult) -> Dict:
-        """Compute extended Phase 2/3 results.
+            peers = self.topology.get_peers(current_node.config.node_id)
+            for peer in peers:
+                if peer.config.node_id in visited:
+                    continue
+                visited.add(peer.config.node_id)
 
-        Returns:
-            Dictionary with all Phase 1 metrics plus Phase 2/3 additions.
-        """
-        mempool_stats = self._mempool.stats()
-
-        # Compute per-block algorithm distribution
-        algo_distribution: Dict[str, int] = {}
-        total_block_txs = 0
-        for block in self._blocks_produced:
-            for tx in block.transactions:
-                algo_distribution[tx.signature_algorithm] = (
-                    algo_distribution.get(tx.signature_algorithm, 0) + 1
+                tx_delay = self._calc_transmission_delay(
+                    current_node, peer, block.size_bytes
                 )
-                total_block_txs += 1
+                net_latency = self.topology.get_latency(
+                    current_node.config.node_id,
+                    peer.config.node_id,
+                )
+                peer_arrival = arrival_time + verify_delay + tx_delay + net_latency
+                propagation_times.append(peer_arrival)
+                queue.append((peer, peer_arrival))
 
-        algo_fractions = {
-            algo: count / total_block_txs if total_block_txs > 0 else 0.0
-            for algo, count in algo_distribution.items()
-        }
+        if propagation_times:
+            propagation_times.sort()
+            n = len(propagation_times)
+            p50 = propagation_times[int(n * 0.50)]
+            p90 = propagation_times[int(n * 0.90)]
 
-        # Average verification time
-        avg_verify_ms = (
-            sum(self._verification_times_ms) / len(self._verification_times_ms)
-            if self._verification_times_ms
-            else 0.0
+            result = SimulationResult(
+                block_id=block.block_id,
+                produced_at=block.produced_at,
+                num_txs=len(block.transactions),
+                block_size_bytes=block.size_bytes,
+                propagation_p50_ms=p50 * 1000,
+                propagation_p90_ms=p90 * 1000,
+                signature_algorithm=self.config.signature_algorithm,
+                chain=self.config.chain,
+                pqc_fraction=self._pqc_fraction_current,
+            )
+            self._results.append(result)
+
+            # FIX #1: Use 0.9 × block_time as stale threshold (was 0.5)
+            stale_threshold = self.chain_config.block_time_s * 0.9
+            if p90 > stale_threshold:
+                self.state.record_stale_block(block.block_id)
+                logger.warning(
+                    "Stale block %s: p90=%.3fs > threshold=%.3fs",
+                    block.block_id, p90, stale_threshold,
+                )
+
+    def get_mempool_eviction_count(self) -> int:
+        """Return total number of evicted transactions."""
+        return self._mempool_evictions
+
+
+def run_monte_carlo(
+    base_config: SimulationConfig,
+    phase2_config: Phase2Config,
+    seeds: Optional[List[int]] = None,
+) -> List[Dict]:
+    """Run Monte Carlo sweep and aggregate results."""
+    if seeds is None:
+        seeds = list(range(phase2_config.num_monte_carlo_runs))
+
+    all_results = []
+    for seed in seeds:
+        cfg = SimulationConfig(
+            chain=base_config.chain,
+            signature_algorithm=base_config.signature_algorithm,
+            num_validators=base_config.num_validators,
+            num_full_nodes=base_config.num_full_nodes,
+            simulation_duration=base_config.simulation_duration,
+            random_seed=seed,
+            pqc_adoption_fraction=base_config.pqc_adoption_fraction,
         )
-        max_verify_ms = (
-            max(self._verification_times_ms)
-            if self._verification_times_ms
-            else 0.0
-        )
+        engine = Phase2Engine(cfg, phase2_config)
+        results = engine.run()
 
-        # Network failure detection
-        # A block "fails" if verification time exceeds the block interval
-        block_time_ms = self._engine.block_time_ms
-        verification_failures = sum(
-            1 for v in self._verification_times_ms if v > block_time_ms
-        )
-        verification_failure_rate = (
-            verification_failures / len(self._verification_times_ms)
-            if self._verification_times_ms
-            else 0.0
-        )
+        if results:
+            import numpy as np
+            p50s = [r.propagation_p50_ms for r in results]
+            p90s = [r.propagation_p90_ms for r in results]
+            block_sizes = [r.block_size_bytes for r in results]
+            tx_counts = [r.num_txs for r in results]
 
-        # Stale rate: blocks where p90 propagation > half block time
-        stale_threshold = block_time_ms * 0.5
+            all_results.append({
+                "seed": seed,
+                "chain": base_config.chain,
+                "pqc_fraction": base_config.pqc_adoption_fraction,
+                "num_blocks": len(results),
+                "avg_propagation_p50_ms": float(np.mean(p50s)),
+                "avg_propagation_p90_ms": float(np.mean(p90s)),
+                "std_propagation_p90_ms": float(np.std(p90s)),
+                "avg_block_size_bytes": float(np.mean(block_sizes)),
+                "avg_txs_per_block": float(np.mean(tx_counts)),
+                "mempool_evictions": engine.get_mempool_eviction_count(),
+                "pqc_shock_type": phase2_config.pqc_shock_type,
+            })
+            logger.info(
+                "MC run seed=%d: %d blocks, avg_p90=%.1fms",
+                seed, len(results), float(np.mean(p90s))
+            )
 
-        return {
-            # Phase 1 metrics (from base result)
-            "chain": base_result.chain,
-            "pqc_fraction": self.config.pqc_fraction,
-            "seed": self.config.random_seed,
-            "num_blocks": base_result.num_blocks,
-            "avg_block_size_bytes": base_result.avg_block_size_bytes,
-            "avg_txs_per_block": base_result.avg_txs_per_block,
-            "avg_propagation_p50_ms": base_result.avg_propagation_p50_ms,
-            "avg_propagation_p90_ms": base_result.avg_propagation_p90_ms,
-            "avg_propagation_p95_ms": base_result.avg_propagation_p95_ms,
-            "stale_rate": base_result.stale_rate,
-            "effective_tps": base_result.effective_tps,
-
-            # Phase 2: Verification metrics
-            "avg_verification_time_ms": round(avg_verify_ms, 4),
-            "max_verification_time_ms": round(max_verify_ms, 4),
-            "verification_failure_rate": round(verification_failure_rate, 6),
-            "verification_failures": verification_failures,
-            "block_time_ms": block_time_ms,
-
-            # Phase 3: Mempool metrics
-            "mempool_total_accepted": mempool_stats.total_accepted,
-            "mempool_total_evicted": mempool_stats.total_evicted,
-            "mempool_total_rejected": mempool_stats.total_rejected,
-            "mempool_final_size_bytes": mempool_stats.current_size_bytes,
-            "mempool_final_tx_count": mempool_stats.current_tx_count,
-            "total_tx_generated": self._total_tx_generated,
-
-            # Algorithm distribution in blocks
-            "algo_distribution": algo_fractions,
-            "algo_counts": algo_distribution,
-        }
+    return all_results

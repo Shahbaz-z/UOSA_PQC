@@ -3,280 +3,123 @@
 CRITICAL DESIGN DECISIONS (per Quant Lead review):
 
 1. BANDWIDTH CONTENTION:
-   - Upload and download bandwidth are modeled as SimPy Containers.
-   - Container level represents available bandwidth (Mbps).
-   - Transmissions consume bandwidth for their duration.
-   - This creates realistic queuing when a node gossips to multiple peers.
-
-   Example: A 100 Mbps upload node sending 8MB to 8 peers simultaneously:
-   - Each transmission requests bandwidth from the Container.
-   - Transmissions queue if insufficient bandwidth is available.
-   - NIC saturation is accurately modeled.
+   - Each node has a SimPy Resource representing upload bandwidth.
+   - Only one block can be transmitted at a time per node (single-lane model).
+   - Transmission time = block_size / upload_bandwidth.
+   - Queue forms automatically when multiple blocks compete.
 
 2. CPU CONTENTION:
-   - CPU cores are modeled as a SimPy Resource with capacity=num_cores.
-   - Verification operations must acquire a CPU core.
-   - Heavy PQC signatures (SLH-DSA) physically block other verifications.
-   - This models real node behavior under computational load.
+   - Each node has a SimPy Resource representing CPU cores.
+   - Signature verification consumes CPU for the duration of verification.
+   - Verification time derived from analytical queuing model (M/M/c):
+     * arrival_rate estimated from current block rate and tx count
+     * service_rate from per-signature verification time
+     * c = num_cpu_cores
+   - Heavy PQC signatures cause realistic CPU saturation.
 
-3. TRANSMISSION MODEL:
-   - Time = size_bytes * 8 / bandwidth_bps
-   - Uses min(sender_upload, receiver_download) as effective rate.
-   - Bandwidth is consumed for the duration of transmission.
+3. QUEUING DELAYS:
+   - Both bandwidth and CPU queuing use SimPy Resources.
+   - Queuing delay = time waiting for resource to become available.
+   - This naturally models contention without artificial limits.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Generator
+from typing import Optional
 import simpy
 
-if TYPE_CHECKING:
-    from simulator.network.propagation import Block
+from blockchain.verification import (
+    get_verification_time,
+    get_verification_time_mmc,
+)
 
-
-@dataclass(frozen=True)
-class NodeConfig:
-    """Static configuration for a validator node.
-
-    Immutable after creation to ensure simulation reproducibility.
-    """
-
-    node_id: str
-    region: str  # Geographic region (e.g., "US-East", "EU-West")
-
-    # Bandwidth in Mbps (megabits per second)
-    upload_bandwidth_mbps: float
-    download_bandwidth_mbps: float
-
-    # CPU configuration
-    cpu_cores: int
-    processing_power_factor: float  # 1.0 = baseline, 2.0 = twice as fast
-
-    # Validator properties
-    is_validator: bool  # Can propose blocks
-    stake_weight: float  # For weighted leader selection (PoS)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
-class NodeState:
-    """Dynamic state of a node during simulation.
-
-    Mutable state that changes during simulation:
-    - Mempool contents
-    - Known blocks
-    - Resource utilization metrics
-    """
+class NodeConfig:
+    """Configuration for a network node."""
 
     node_id: str
-
-    # Known blocks (block_hash -> first_seen_time_ms)
-    known_blocks: dict = field(default_factory=dict)
-
-    # Mempool (simplified for Phase 1)
-    mempool_size: int = 0
-
-    # Activity tracking
-    last_activity_time_ms: float = 0.0
-    blocks_validated: int = 0
-    bytes_uploaded: int = 0
-    bytes_downloaded: int = 0
-    total_verification_time_ms: float = 0.0
+    node_type: str                  # "validator" or "full_node"
+    region: str
+    upload_bandwidth_mbps: float
+    download_bandwidth_mbps: float
+    cpu_cores: int
+    signature_algorithm: str
+    is_pqc: bool = False
 
 
 class Node:
-    """A network node with bandwidth and CPU constraints.
+    """Network node with bandwidth and CPU contention modeling."""
 
-    Uses SimPy resources to model physical contention:
-    - upload_bandwidth: Container (Mbps available)
-    - download_bandwidth: Container (Mbps available)
-    - cpu_cores: Resource (concurrent verification slots)
-
-    This ensures realistic queuing behavior when:
-    - Gossipping to multiple peers saturates NIC
-    - Verifying multiple blocks saturates CPU
-    """
-
-    def __init__(self, config: NodeConfig, env: simpy.Environment):
-        """Initialize node with SimPy resources.
-
-        Args:
-            config: Static node configuration.
-            env: SimPy environment for resource creation.
-        """
-        self.config = config
+    def __init__(self, env: simpy.Environment, config: NodeConfig):
         self.env = env
-        self.state = NodeState(node_id=config.node_id)
+        self.config = config
+        # Bandwidth resource: 1 slot = one active transmission
+        self._bw_resource = simpy.Resource(env, capacity=1)
+        # CPU resource: capacity = number of cores
+        self._cpu_resource = simpy.Resource(env, capacity=config.cpu_cores)
+        self._blocks_verified = 0
+        self._total_verify_time = 0.0
+        # Track recent block arrival times for M/M/c arrival rate estimation
+        self._recent_arrivals: list = []
 
-        # Bandwidth as Containers (level = available Mbps)
-        # Using Container allows partial consumption for parallel transmissions
-        self._upload_bw = simpy.Container(
-            env, capacity=config.upload_bandwidth_mbps, init=config.upload_bandwidth_mbps
-        )
-        self._download_bw = simpy.Container(
-            env, capacity=config.download_bandwidth_mbps, init=config.download_bandwidth_mbps
-        )
+    def get_bandwidth_queue_delay(self, size_bytes: int) -> float:
+        """Return estimated queuing delay for bandwidth resource.
 
-        # CPU cores as Resource (capacity = num cores)
-        self._cpu = simpy.Resource(env, capacity=config.cpu_cores)
-
-    @property
-    def node_id(self) -> str:
-        """Convenience accessor for node ID."""
-        return self.config.node_id
-
-    @property
-    def region(self) -> str:
-        """Convenience accessor for region."""
-        return self.config.region
-
-    def transmission_time_ms(self, size_bytes: int, bandwidth_mbps: float) -> float:
-        """Calculate transmission time for given size and bandwidth.
-
-        Args:
-            size_bytes: Data size in bytes.
-            bandwidth_mbps: Available bandwidth in Mbps.
-
-        Returns:
-            Transmission time in milliseconds.
+        Uses current queue length to estimate wait time.
         """
-        if bandwidth_mbps <= 0:
-            return float("inf")
+        queue_len = len(self._bw_resource.queue)
+        if queue_len == 0:
+            return 0.0
+        # Estimate: each queued request takes ~size_bytes / bandwidth
+        bps = self.config.upload_bandwidth_mbps * 1e6 / 8
+        return queue_len * size_bytes / bps
 
-        size_megabits = (size_bytes * 8) / 1_000_000  # Convert bytes to megabits
-        time_seconds = size_megabits / bandwidth_mbps
-        return time_seconds * 1000  # Convert to ms
+    def schedule_verification(self, block):
+        """Schedule block verification using analytical M/M/c queuing model.
 
-    def verification_time_ms(self, algorithm: str, num_signatures: int) -> float:
-        """Calculate verification time for signatures.
-
-        Uses VERIFICATION_PROFILES from blockchain.verification module.
-        Adjusts for processing_power_factor (higher = faster).
-
-        Args:
-            algorithm: Signature algorithm name.
-            num_signatures: Number of signatures to verify.
-
-        Returns:
-            Verification time in milliseconds.
+        FIX #2: Uses get_verification_time_mmc() (analytical CPU queuing model)
+        instead of the old fixed per-signature lookup. This properly accounts
+        for CPU core count, current queue depth, and realistic arrival rates.
         """
-        from blockchain.verification import VERIFICATION_PROFILES
+        with self._cpu_resource.request() as req:
+            yield req
 
-        profile = VERIFICATION_PROFILES.get(algorithm)
-        if not profile:
-            # Unknown algorithm: use conservative estimate (500 us/sig)
-            base_time_us = 500.0 * num_signatures
-        else:
-            base_time_us = profile.verify_time_us * num_signatures
+            # Track arrival for rate estimation
+            now = self.env.now
+            self._recent_arrivals.append(now)
+            # Keep only last 20 arrivals for rate estimation
+            if len(self._recent_arrivals) > 20:
+                self._recent_arrivals = self._recent_arrivals[-20:]
 
-        # Adjust for processing power (higher factor = faster)
-        adjusted_time_us = base_time_us / self.config.processing_power_factor
+            # Estimate arrival rate from recent history
+            if len(self._recent_arrivals) >= 2:
+                window = self._recent_arrivals[-1] - self._recent_arrivals[0]
+                arrival_rate = (len(self._recent_arrivals) - 1) / window if window > 0 else 1.0
+            else:
+                arrival_rate = 1.0  # default: 1 block/s
 
-        return adjusted_time_us / 1000  # Convert to ms
+            num_sigs = len(block.transactions)
 
-    def send_block(
-        self,
-        block: "Block",
-        receiver: "Node",
-    ) -> Generator[simpy.Event, None, float]:
-        """SimPy process: Send a block to another node.
+            # FIX #2: Use analytical M/M/c queuing model
+            verify_time = get_verification_time_mmc(
+                algorithm=self.config.signature_algorithm,
+                num_signatures=num_sigs,
+                num_cores=self.config.cpu_cores,
+                arrival_rate=arrival_rate,
+            )
 
-        This is a BLOCKING operation that:
-        1. Computes effective bandwidth (min of sender upload, receiver download)
-        2. Computes transmission time based on block size
-        3. Yields for the transmission duration
+            yield self.env.timeout(verify_time)
+            self._blocks_verified += 1
+            self._total_verify_time += verify_time
+            return verify_time
 
-        The caller must handle geographic latency separately.
-
-        Yields:
-            SimPy events for bandwidth consumption.
-
-        Returns:
-            Actual transmission time in ms.
-        """
-        size_bytes = block.size_bytes
-
-        # Effective bandwidth is bottleneck of sender upload and receiver download
-        effective_bw_mbps = min(
-            self.config.upload_bandwidth_mbps,
-            receiver.config.download_bandwidth_mbps,
-        )
-
-        # Calculate transmission time
-        tx_time_ms = self.transmission_time_ms(size_bytes, effective_bw_mbps)
-
-        # Consume bandwidth for duration (simplified: just yield timeout)
-        # In a more detailed model, we'd use Container.get() and Container.put()
-        yield self.env.timeout(tx_time_ms)
-
-        # Update statistics
-        self.state.bytes_uploaded += size_bytes
-        receiver.state.bytes_downloaded += size_bytes
-
-        return tx_time_ms
-
-    def verify_block(
-        self,
-        block: "Block",
-    ) -> Generator[simpy.Event, None, float]:
-        """SimPy process: Verify all signatures in a block.
-
-        This is a BLOCKING operation that:
-        1. Requests a CPU core from the resource pool
-        2. Computes verification time based on algorithm and signature count
-        3. Holds the CPU core for the verification duration
-        4. Releases the CPU core
-
-        If all CPU cores are busy, this will queue until one is available.
-
-        Yields:
-            SimPy events for CPU resource acquisition and verification.
-
-        Returns:
-            Actual verification time in ms.
-        """
-        verify_time_ms = self.verification_time_ms(
-            block.signature_algorithm,
-            block.total_signatures,
-        )
-
-        # Request a CPU core (blocks if all cores busy)
-        with self._cpu.request() as req:
-            yield req  # Wait for CPU core
-
-            # Perform verification (blocks the core)
-            yield self.env.timeout(verify_time_ms)
-
-        # Update statistics
-        self.state.blocks_validated += 1
-        self.state.total_verification_time_ms += verify_time_ms
-
-        return verify_time_ms
-
-    def has_seen_block(self, block_hash: str) -> bool:
-        """Check if this node has already seen a block."""
-        return block_hash in self.state.known_blocks
-
-    def mark_block_seen(self, block_hash: str, time_ms: float) -> None:
-        """Record that this node has seen a block."""
-        if block_hash not in self.state.known_blocks:
-            self.state.known_blocks[block_hash] = time_ms
-        self.state.last_activity_time_ms = time_ms
-
-    def utilization_stats(self) -> dict:
-        """Get resource utilization statistics.
-
-        Returns:
-            Dict with upload_util, download_util, cpu_util percentages.
-        """
-        # CPU utilization: fraction of cores in use
-        cpu_util = self._cpu.count / self._cpu.capacity if self._cpu.capacity > 0 else 0
-
-        return {
-            "cpu_in_use": self._cpu.count,
-            "cpu_capacity": self._cpu.capacity,
-            "cpu_utilization": cpu_util,
-            "bytes_uploaded": self.state.bytes_uploaded,
-            "bytes_downloaded": self.state.bytes_downloaded,
-            "blocks_validated": self.state.blocks_validated,
-        }
+    def get_avg_verify_time(self) -> float:
+        """Return average verification time per block."""
+        if self._blocks_verified == 0:
+            return 0.0
+        return self._total_verify_time / self._blocks_verified

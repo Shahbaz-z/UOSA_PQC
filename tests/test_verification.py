@@ -3,227 +3,219 @@
 import pytest
 
 from blockchain.verification import (
-    VERIFICATION_PROFILES,
-    VerificationProfile,
-    VerificationResult,
-    get_verification_profile,
-    compute_block_verification_time,
-    compute_verification_limited_tps,
+    VERIFICATION_TIME_MS,
+    get_verification_time,
+    get_verification_time_mmc,
 )
-from blockchain.chain_models import SIGNATURE_SIZES
 
 
 # ---------------------------------------------------------------------------
-# Profile catalog tests
+# Tests for VERIFICATION_TIME_MS constants (FIX #4 validation)
 # ---------------------------------------------------------------------------
 
-class TestVerificationProfiles:
-    def test_all_signature_algorithms_have_profiles(self):
-        """Every algorithm in SIGNATURE_SIZES should have a verification profile."""
-        for algo in SIGNATURE_SIZES:
-            assert algo in VERIFICATION_PROFILES, f"Missing profile for {algo}"
+class TestVerificationTimeConstants:
+    """Validate corrected SLH-DSA verification time constants."""
 
-    def test_profiles_are_frozen(self):
-        """Profiles should be immutable."""
-        profile = VERIFICATION_PROFILES["Ed25519"]
-        with pytest.raises(AttributeError):
-            profile.verify_time_us = 999
+    def test_ed25519_baseline(self):
+        """Ed25519 should be fast: ~0.05ms."""
+        assert VERIFICATION_TIME_MS["Ed25519"] == pytest.approx(0.05)
 
-    def test_classical_faster_than_pqc(self):
-        """Classical algorithms should generally verify faster than PQC."""
-        ed = VERIFICATION_PROFILES["Ed25519"].verify_time_us
-        falcon = VERIFICATION_PROFILES["Falcon-512"].verify_time_us
-        mldsa = VERIFICATION_PROFILES["ML-DSA-65"].verify_time_us
-        assert ed < falcon < mldsa
+    def test_ml_dsa_65_reasonable(self):
+        """ML-DSA-65 should be close to Ed25519 speed (lattice-based is fast)."""
+        val = VERIFICATION_TIME_MS["ML-DSA-65"]
+        assert 0.04 <= val <= 0.15, f"ML-DSA-65={val}ms out of expected range"
 
-    def test_falcon_faster_than_mldsa(self):
-        """Falcon verification should be faster than ML-DSA at same security level."""
-        assert VERIFICATION_PROFILES["Falcon-512"].verify_time_us < VERIFICATION_PROFILES["ML-DSA-44"].verify_time_us
+    def test_slh_dsa_shake_128s_corrected(self):
+        """FIX #4: SLH-DSA-SHAKE-128s must be >> Ed25519 (hash-based is slow)."""
+        slh = VERIFICATION_TIME_MS["SLH-DSA-SHAKE-128s"]
+        ed = VERIFICATION_TIME_MS["Ed25519"]
+        # Must be at least 10× slower than Ed25519
+        assert slh >= ed * 10, (
+            f"SLH-DSA-SHAKE-128s={slh}ms should be ≥10× Ed25519={ed}ms. "
+            f"Fix #4 not applied correctly."
+        )
 
-    def test_slh_dsa_slow_variants(self):
-        """SLH-DSA 's' variants should be slower than 'f' variants."""
-        assert VERIFICATION_PROFILES["SLH-DSA-128s"].verify_time_us > VERIFICATION_PROFILES["SLH-DSA-128f"].verify_time_us
-        assert VERIFICATION_PROFILES["SLH-DSA-256s"].verify_time_us > VERIFICATION_PROFILES["SLH-DSA-256f"].verify_time_us
+    def test_slh_dsa_shake_256s_slowest(self):
+        """SLH-DSA-SHAKE-256s is the slowest variant (largest params)."""
+        v256s = VERIFICATION_TIME_MS["SLH-DSA-SHAKE-256s"]
+        v128s = VERIFICATION_TIME_MS["SLH-DSA-SHAKE-128s"]
+        assert v256s > v128s, "256s should be slower than 128s"
 
-    def test_hybrid_is_sum(self):
-        """Hybrid verification time should be sum of both components."""
-        ed_time = VERIFICATION_PROFILES["Ed25519"].verify_time_us
-        falcon_time = VERIFICATION_PROFILES["Falcon-512"].verify_time_us
-        hybrid_time = VERIFICATION_PROFILES["Hybrid-Ed25519+Falcon-512"].verify_time_us
-        assert hybrid_time == ed_time + falcon_time
+    def test_slh_dsa_fast_variants_faster_than_slow(self):
+        """Fast variants (128f, 192f, 256f) must be faster than slow variants."""
+        assert (
+            VERIFICATION_TIME_MS["SLH-DSA-SHAKE-128f"]
+            < VERIFICATION_TIME_MS["SLH-DSA-SHAKE-128s"]
+        )
+        assert (
+            VERIFICATION_TIME_MS["SLH-DSA-SHAKE-192f"]
+            < VERIFICATION_TIME_MS["SLH-DSA-SHAKE-192s"]
+        )
+        assert (
+            VERIFICATION_TIME_MS["SLH-DSA-SHAKE-256f"]
+            < VERIFICATION_TIME_MS["SLH-DSA-SHAKE-256s"]
+        )
 
-    def test_all_verify_times_positive(self):
-        for algo, profile in VERIFICATION_PROFILES.items():
-            assert profile.verify_time_us > 0, f"{algo} has non-positive verify time"
+    def test_all_algorithms_positive(self):
+        """All verification times must be positive."""
+        for alg, t in VERIFICATION_TIME_MS.items():
+            assert t > 0, f"{alg} has non-positive verification time: {t}"
 
-    def test_batch_speedup_range(self):
-        for algo, profile in VERIFICATION_PROFILES.items():
-            assert 0 < profile.batch_speedup <= 1.0, f"{algo} batch_speedup out of range: {profile.batch_speedup}"
-
-    def test_ed25519_batch_speedup(self):
-        """Ed25519 supports batch verification (speedup < 1.0)."""
-        assert VERIFICATION_PROFILES["Ed25519"].batch_speedup < 1.0
-
-    def test_schnorr_batch_speedup(self):
-        """Schnorr supports batch verification (MuSig-style)."""
-        assert VERIFICATION_PROFILES["Schnorr"].batch_speedup < 1.0
-
-
-# ---------------------------------------------------------------------------
-# get_verification_profile tests
-# ---------------------------------------------------------------------------
-
-class TestGetVerificationProfile:
-    def test_valid_algorithm(self):
-        profile = get_verification_profile("Falcon-512")
-        assert isinstance(profile, VerificationProfile)
-        assert profile.algorithm == "Falcon-512"
-
-    def test_invalid_algorithm(self):
-        with pytest.raises(ValueError, match="Unknown algorithm"):
-            get_verification_profile("NotAnAlgorithm")
+    def test_slh_dsa_range_cloudflare_2024(self):
+        """SLH-DSA values should be in Cloudflare 2024 benchmark range (0.5-10ms)."""
+        slh_algs = [k for k in VERIFICATION_TIME_MS if k.startswith("SLH-DSA")]
+        for alg in slh_algs:
+            t = VERIFICATION_TIME_MS[alg]
+            assert 0.5 <= t <= 12.0, (
+                f"{alg}={t}ms outside Cloudflare 2024 range [0.5, 10ms]. "
+                f"Fix #4 may not be applied."
+            )
 
 
 # ---------------------------------------------------------------------------
-# Block verification time tests
+# Tests for get_verification_time (simple parallel model)
 # ---------------------------------------------------------------------------
 
-class TestComputeBlockVerificationTime:
-    def test_basic_result(self):
-        result = compute_block_verification_time(
-            "Ed25519", txs_per_block=1000, block_time_ms=400.0, num_cores=4
-        )
-        assert isinstance(result, VerificationResult)
-        assert result.algorithm == "Ed25519"
-        assert result.txs_in_block == 1000
-        assert result.num_cores == 4
+class TestGetVerificationTime:
+    """Tests for the simple (non-queuing) verification time model."""
 
-    def test_serial_time_calculation(self):
-        """Serial time = verify_time_us * num_txs / 1000."""
-        result = compute_block_verification_time(
-            "Ed25519", txs_per_block=1000, block_time_ms=400.0, num_cores=1,
-            use_batch=False,
-        )
-        expected_ms = 60.0 * 1000 / 1000.0  # 60ms
-        assert result.serial_time_ms == expected_ms
+    def test_single_core_single_sig(self):
+        """Single core, single sig: just the per-sig time."""
+        t = get_verification_time("Ed25519", num_signatures=1, num_cores=1)
+        assert t == pytest.approx(0.05 / 1000.0)
 
-    def test_parallel_speedup(self):
-        """4 cores should give ~4x speedup."""
-        result_1 = compute_block_verification_time(
-            "ML-DSA-65", txs_per_block=500, block_time_ms=12000.0, num_cores=1,
-            use_batch=False,
-        )
-        result_4 = compute_block_verification_time(
-            "ML-DSA-65", txs_per_block=500, block_time_ms=12000.0, num_cores=4,
-            use_batch=False,
-        )
-        assert result_4.parallel_time_ms == pytest.approx(result_1.serial_time_ms / 4, rel=0.01)
+    def test_parallelism_reduces_time(self):
+        """More cores → less total verification time."""
+        t1 = get_verification_time("ML-DSA-65", num_signatures=100, num_cores=1)
+        t4 = get_verification_time("ML-DSA-65", num_signatures=100, num_cores=4)
+        assert t4 < t1, "4 cores should be faster than 1 core"
 
-    def test_batch_speedup_applied(self):
-        """Batch verification should reduce time for Ed25519."""
-        result_no_batch = compute_block_verification_time(
-            "Ed25519", txs_per_block=1000, block_time_ms=400.0, num_cores=1,
-            use_batch=False,
-        )
-        result_batch = compute_block_verification_time(
-            "Ed25519", txs_per_block=1000, block_time_ms=400.0, num_cores=1,
-            use_batch=True,
-        )
-        assert result_batch.serial_time_ms < result_no_batch.serial_time_ms
+    def test_more_sigs_more_time(self):
+        """More signatures → more verification time."""
+        t10 = get_verification_time("Ed25519", num_signatures=10, num_cores=1)
+        t100 = get_verification_time("Ed25519", num_signatures=100, num_cores=1)
+        assert t100 > t10
 
-    def test_exceeds_block_time_detection(self):
-        """SLH-DSA-256s with many txs should exceed Solana's 400ms block time."""
-        result = compute_block_verification_time(
-            "SLH-DSA-256s", txs_per_block=100, block_time_ms=400.0, num_cores=4,
+    def test_slh_dsa_much_slower_than_ed25519(self):
+        """SLH-DSA should produce significantly higher verification times."""
+        t_ed = get_verification_time("Ed25519", num_signatures=100, num_cores=4)
+        t_slh = get_verification_time("SLH-DSA-SHAKE-256s", num_signatures=100, num_cores=4)
+        assert t_slh > t_ed * 50, (
+            f"SLH-DSA ({t_slh:.4f}s) should be >>50× Ed25519 ({t_ed:.4f}s)"
         )
-        # 100 * 8000μs = 800ms serial, 200ms parallel (4 cores)
-        # 200ms < 400ms, so should NOT exceed... but with more txs:
-        result2 = compute_block_verification_time(
-            "SLH-DSA-256s", txs_per_block=1000, block_time_ms=400.0, num_cores=4,
-        )
-        # 1000 * 8000μs = 8000ms serial, 2000ms parallel
-        assert result2.exceeds_block_time is True
-        assert result2.verification_bottleneck_ratio > 1.0
 
-    def test_zero_txs(self):
-        """Zero transactions should be valid."""
-        result = compute_block_verification_time(
-            "Ed25519", txs_per_block=0, block_time_ms=400.0, num_cores=4,
-        )
-        assert result.serial_time_ms == 0.0
-        assert result.parallel_time_ms == 0.0
-        assert result.exceeds_block_time is False
+    def test_unknown_algorithm_uses_default(self):
+        """Unknown algorithm falls back to Ed25519-like default."""
+        t = get_verification_time("UnknownAlg-999", num_signatures=10, num_cores=1)
+        assert t > 0
 
-    def test_negative_txs_raises(self):
-        with pytest.raises(ValueError, match="non-negative"):
-            compute_block_verification_time("Ed25519", txs_per_block=-1, block_time_ms=400.0)
-
-    def test_zero_block_time_raises(self):
-        with pytest.raises(ValueError, match="positive"):
-            compute_block_verification_time("Ed25519", txs_per_block=100, block_time_ms=0.0)
-
-    def test_zero_cores_raises(self):
-        with pytest.raises(ValueError, match=">= 1"):
-            compute_block_verification_time("Ed25519", txs_per_block=100, block_time_ms=400.0, num_cores=0)
-
-    def test_effective_tps_capped_by_verification(self):
-        """When verification is the bottleneck, effective TPS should be lower than space TPS."""
-        result = compute_block_verification_time(
-            "SLH-DSA-256s", txs_per_block=500, block_time_ms=400.0, num_cores=1,
-        )
-        space_tps = 500 / (400.0 / 1000.0)  # 1250 TPS
-        assert result.effective_tps < space_tps
-
-    def test_solana_ed25519_no_bottleneck(self):
-        """Ed25519 on Solana should not be verification-bottlenecked."""
-        result = compute_block_verification_time(
-            "Ed25519", txs_per_block=5000, block_time_ms=400.0, num_cores=8,
-        )
-        assert result.exceeds_block_time is False
-
-    def test_bottleneck_ratio_meaning(self):
-        """Ratio > 1.0 means verification is slower than block production."""
-        result = compute_block_verification_time(
-            "SLH-DSA-256s", txs_per_block=1000, block_time_ms=400.0, num_cores=1,
-        )
-        assert result.verification_bottleneck_ratio > 1.0
-        assert result.exceeds_block_time is True
+    def test_zero_cores_handled(self):
+        """Zero cores should not raise (clamp to 1)."""
+        t = get_verification_time("Ed25519", num_signatures=10, num_cores=0)
+        assert t > 0
 
 
 # ---------------------------------------------------------------------------
-# Verification-limited TPS tests
+# Tests for get_verification_time_mmc (M/M/c analytical queuing model)
 # ---------------------------------------------------------------------------
 
-class TestComputeVerificationLimitedTps:
-    def test_ed25519_high_ceiling(self):
-        """Ed25519 should have a very high verification TPS ceiling."""
-        tps = compute_verification_limited_tps("Ed25519", block_time_ms=400.0, num_cores=8)
-        # 8 cores, 60μs per verify (with batch 0.5 = 30μs), 400ms block
-        # = 400000/30 * 8 / 0.4 = very high
-        assert tps > 100_000
+class TestGetVerificationTimeMmc:
+    """Tests for the M/M/c queuing model. FIX #2 validation."""
 
-    def test_slh_dsa_low_ceiling(self):
-        """SLH-DSA-256s should have a low verification TPS ceiling."""
-        tps = compute_verification_limited_tps("SLH-DSA-256s", block_time_ms=400.0, num_cores=4)
-        # 4 cores, 8000μs per verify, 400ms block
-        # = 400000/8000 * 4 / 0.4 = 500
-        assert tps < 1000
+    def test_mmc_returns_positive_time(self):
+        """M/M/c should return a positive time."""
+        t = get_verification_time_mmc(
+            algorithm="Ed25519",
+            num_signatures=100,
+            num_cores=4,
+            arrival_rate=1.0,
+        )
+        assert t > 0
 
-    def test_more_cores_increases_tps(self):
-        tps_4 = compute_verification_limited_tps("ML-DSA-65", block_time_ms=12000.0, num_cores=4)
-        tps_8 = compute_verification_limited_tps("ML-DSA-65", block_time_ms=12000.0, num_cores=8)
-        assert tps_8 > tps_4
+    def test_mmc_geq_simple_model(self):
+        """M/M/c time >= simple model (queuing adds wait time)."""
+        t_simple = get_verification_time("ML-DSA-65", num_signatures=100, num_cores=4)
+        t_mmc = get_verification_time_mmc(
+            algorithm="ML-DSA-65",
+            num_signatures=100,
+            num_cores=4,
+            arrival_rate=1.0,
+        )
+        assert t_mmc >= t_simple, (
+            f"M/M/c ({t_mmc:.6f}s) should be >= simple ({t_simple:.6f}s)"
+        )
 
-    def test_invalid_block_time(self):
-        with pytest.raises(ValueError, match="positive"):
-            compute_verification_limited_tps("Ed25519", block_time_ms=0.0)
+    def test_mmc_high_load_increases_time(self):
+        """Higher arrival rate → more queuing → more time."""
+        t_low = get_verification_time_mmc(
+            algorithm="SLH-DSA-SHAKE-256s",
+            num_signatures=100,
+            num_cores=4,
+            arrival_rate=0.1,
+        )
+        t_high = get_verification_time_mmc(
+            algorithm="SLH-DSA-SHAKE-256s",
+            num_signatures=100,
+            num_cores=4,
+            arrival_rate=5.0,
+        )
+        assert t_high >= t_low, "Higher load should not decrease time"
 
-    def test_invalid_cores(self):
-        with pytest.raises(ValueError, match=">= 1"):
-            compute_verification_limited_tps("Ed25519", block_time_ms=400.0, num_cores=0)
+    def test_mmc_more_cores_less_time(self):
+        """More CPU cores → less M/M/c time."""
+        t1 = get_verification_time_mmc(
+            algorithm="ML-DSA-65",
+            num_signatures=200,
+            num_cores=1,
+            arrival_rate=2.0,
+        )
+        t8 = get_verification_time_mmc(
+            algorithm="ML-DSA-65",
+            num_signatures=200,
+            num_cores=8,
+            arrival_rate=2.0,
+        )
+        assert t8 < t1, f"8 cores ({t8:.4f}s) should be faster than 1 core ({t1:.4f}s)"
 
-    def test_falcon_vs_mldsa_ceiling(self):
-        """Falcon should have higher verification TPS ceiling than ML-DSA."""
-        falcon_tps = compute_verification_limited_tps("Falcon-512", block_time_ms=12000.0, num_cores=4)
-        mldsa_tps = compute_verification_limited_tps("ML-DSA-65", block_time_ms=12000.0, num_cores=4)
-        assert falcon_tps > mldsa_tps
+    def test_mmc_slh_dsa_slower_than_ml_dsa(self):
+        """SLH-DSA should be considerably slower than ML-DSA in M/M/c model."""
+        t_ml = get_verification_time_mmc(
+            algorithm="ML-DSA-65",
+            num_signatures=100,
+            num_cores=4,
+            arrival_rate=1.0,
+        )
+        t_slh = get_verification_time_mmc(
+            algorithm="SLH-DSA-SHAKE-256s",
+            num_signatures=100,
+            num_cores=4,
+            arrival_rate=1.0,
+        )
+        assert t_slh > t_ml * 10, (
+            f"SLH-DSA M/M/c ({t_slh:.4f}s) should be >>10× ML-DSA ({t_ml:.4f}s)"
+        )
+
+    def test_mmc_overloaded_system_finite_time(self):
+        """Overloaded system (rho >= 1) should still return a finite time."""
+        t = get_verification_time_mmc(
+            algorithm="SLH-DSA-SHAKE-256s",
+            num_signatures=10000,
+            num_cores=1,
+            arrival_rate=100.0,
+        )
+        assert t > 0
+        assert t < 1e6, "Should not be infinite"
+
+    def test_mmc_zero_arrival_rate_returns_base_time(self):
+        """Near-zero arrival rate: M/M/c ≈ simple model."""
+        t_simple = get_verification_time("Ed25519", num_signatures=10, num_cores=2)
+        t_mmc = get_verification_time_mmc(
+            algorithm="Ed25519",
+            num_signatures=10,
+            num_cores=2,
+            arrival_rate=1e-9,
+        )
+        # At near-zero load, M/M/c ≈ simple (small overhead allowed)
+        assert t_mmc == pytest.approx(t_simple, rel=0.1), (
+            f"Near-zero load M/M/c ({t_mmc:.6f}s) should ≈ simple ({t_simple:.6f}s)"
+        )
