@@ -20,14 +20,14 @@ class TestAppLoads:
         at.run()
         assert not at.exception, f"App raised exception: {at.exception}"
 
-    def test_has_three_tabs(self):
-        """The app should render exactly 3 tabs."""
+    def test_has_four_tabs(self):
+        """The app should render exactly 4 tabs (Phase 1 + PQC Shock)."""
         from streamlit.testing.v1 import AppTest
 
         at = AppTest.from_file("app/pqc_demo_streamlit.py", default_timeout=30)
         at.run()
         assert not at.exception
-        assert len(at.tabs) == 3
+        assert len(at.tabs) == 4
 
     def test_title_present(self):
         """The app should have a title."""

@@ -29,6 +29,7 @@ from app.tabs import (
     render_block_space,
     render_comparison,
     render_cross_chain,
+    render_pqc_shock,
 )
 
 # ---------------------------------------------------------------------------
@@ -184,7 +185,8 @@ with st.sidebar:
     st.markdown(
         "1. **Block-Space** -- Per-chain impact analysis\n"
         "2. **Compare** -- Side-by-side algorithm comparison\n"
-        "3. **Cross-Chain** -- Summary across all blockchains"
+        "3. **Cross-Chain** -- Summary across all blockchains\n"
+        "4. **PQC Shock** -- Phase 2/3 Monte Carlo results"
     )
 
 # ---------------------------------------------------------------------------
@@ -199,12 +201,14 @@ st.caption(
 # ---------------------------------------------------------------------------
 # Tab layout -- rendering delegated to app.tabs modules
 # ---------------------------------------------------------------------------
-tab_block, tab_compare, tab_crosschain = st.tabs([
+tab_block, tab_compare, tab_crosschain, tab_shock = st.tabs([
     "📊 Block-Space Visualizer",
     "⚖️ Side-by-Side Comparison",
     "🌐 Cross-Chain Summary",
+    "💥 PQC Shock Simulator",
 ])
 
 render_block_space(tab_block, CHAIN_QUANTUM_CONTEXT)
 render_comparison(tab_compare)
 render_cross_chain(tab_crosschain, CHAIN_QUANTUM_CONTEXT)
+render_pqc_shock(tab_shock)

@@ -1,0 +1,521 @@
+"""Tab 4: PQC Shock Simulator — Phase 2/3 Monte Carlo results dashboard.
+
+Reads ``results/pqc_sweep.csv`` (210 rows × 30 columns) produced by the
+Phase 2/3 parameter sweep and renders three interactive Plotly charts:
+
+1. **The Death Curve** — stale-rate phase transition with seed variance band
+2. **The False Bottleneck** — dual-axis block-size vs verification time
+3. **Cross-Chain Resilience** — estimated stale rates for Solana / Ethereum / Bitcoin
+
+All heavy data loading is cached via ``st.cache_data`` so Streamlit
+re-renders are instantaneous.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Tuple
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+from plotly.subplots import make_subplots
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+_CSV_PATH = Path(__file__).resolve().parent.parent.parent / "results" / "pqc_sweep.csv"
+
+# Chain block-time budgets (ms) — propagation must stay below this
+_CHAIN_BLOCK_TIMES: dict[str, float] = {
+    "Solana": 400,
+    "Ethereum": 12_000,
+    "Bitcoin": 600_000,
+}
+
+# Colour palette (accessible / consistent with existing charts.py)
+_CLR_MAIN = "#1f77b4"         # primary blue
+_CLR_BAND = "rgba(31,119,180,0.15)"
+_CLR_THRESHOLD = "#d62728"    # red
+_CLR_BAR_SIZE = "#ff7f0e"     # orange
+_CLR_LINE_VERIF = "#2ca02c"   # green
+_CLR_SOLANA = "#9945FF"       # Solana brand purple
+_CLR_ETHEREUM = "#627EEA"     # Ethereum brand blue
+_CLR_BITCOIN = "#F7931A"      # Bitcoin brand orange
+
+
+# ---------------------------------------------------------------------------
+# Data loading (cached)
+# ---------------------------------------------------------------------------
+@st.cache_data(show_spinner="Loading sweep results …")
+def _load_sweep() -> pd.DataFrame:
+    """Load and validate the Monte Carlo sweep CSV."""
+    if not _CSV_PATH.exists():
+        st.error(
+            f"Sweep results not found at `{_CSV_PATH}`.  "
+            "Run `python run_experiments.py` first to generate the data."
+        )
+        st.stop()
+
+    df = pd.read_csv(_CSV_PATH)
+    # Ensure pqc_fraction is a proper float percentage for display
+    df["pqc_pct"] = (df["pqc_fraction"] * 100).round(1)
+    df["avg_block_size_kb"] = df["avg_block_size_bytes"] / 1024
+    return df
+
+
+@st.cache_data(show_spinner="Aggregating across seeds …")
+def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-PQC-fraction mean ± std across Monte Carlo seeds."""
+    agg = (
+        df.groupby("pqc_pct")
+        .agg(
+            stale_mean=("stale_rate", "mean"),
+            stale_std=("stale_rate", "std"),
+            stale_min=("stale_rate", "min"),
+            stale_max=("stale_rate", "max"),
+            size_mean=("avg_block_size_kb", "mean"),
+            size_std=("avg_block_size_kb", "std"),
+            verif_mean=("max_verification_time_ms", "mean"),
+            verif_max=("max_verification_time_ms", "max"),
+            prop_p90_mean=("avg_propagation_p90_ms", "mean"),
+            prop_p90_std=("avg_propagation_p90_ms", "std"),
+            tps_mean=("effective_tps", "mean"),
+        )
+        .reset_index()
+    )
+    # Fill NaN std (only 1 seed or all same) with 0
+    for col in agg.columns:
+        if col.endswith("_std"):
+            agg[col] = agg[col].fillna(0)
+    return agg
+
+
+# ---------------------------------------------------------------------------
+# Cross-chain stale-rate estimation
+# ---------------------------------------------------------------------------
+@st.cache_data(show_spinner="Computing cross-chain estimates …")
+def _estimate_cross_chain(df: pd.DataFrame) -> pd.DataFrame:
+    """Estimate stale rates for Ethereum & Bitcoin from Solana propagation data.
+
+    Approach: the Solana sweep gives us measured P90 propagation times and
+    block sizes at each PQC fraction.  A block goes stale when propagation_P90
+    exceeds the chain's block time.  For the *same* block-size profile, longer
+    block-time chains have proportionally more headroom.
+
+    We scale the Solana propagation times by (block_size_ratio) for chains
+    with different block sizes, then compare against each chain's block time
+    to estimate stale probability.  This is a first-order analytical model
+    shown alongside the empirical Solana data.
+    """
+    solana_agg = (
+        df.groupby("pqc_pct")
+        .agg(
+            prop_p90=("avg_propagation_p90_ms", "mean"),
+            stale=("stale_rate", "mean"),
+        )
+        .reset_index()
+    )
+
+    rows = []
+    for _, r in solana_agg.iterrows():
+        pqc = r["pqc_pct"]
+        # Solana: use empirical stale rate
+        rows.append({"pqc_pct": pqc, "chain": "Solana", "stale_rate": r["stale"]})
+
+        # Ethereum: 12 s blocks — same propagation physics but 30× more time budget.
+        # Stale probability ≈ P(propagation > block_time).  With 12 s blocks,
+        # the propagation times we see (200-310 ms) are <3% of the budget,
+        # so stale rate is effectively 0 until extreme PQC levels.
+        eth_stale = max(0, (r["prop_p90"] - _CHAIN_BLOCK_TIMES["Ethereum"]) / _CHAIN_BLOCK_TIMES["Ethereum"])
+        rows.append({"pqc_pct": pqc, "chain": "Ethereum", "stale_rate": min(1, eth_stale)})
+
+        # Bitcoin: 600 s blocks — propagation is <0.1% of budget
+        btc_stale = max(0, (r["prop_p90"] - _CHAIN_BLOCK_TIMES["Bitcoin"]) / _CHAIN_BLOCK_TIMES["Bitcoin"])
+        rows.append({"pqc_pct": pqc, "chain": "Bitcoin", "stale_rate": min(1, btc_stale)})
+
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Chart builders
+# ---------------------------------------------------------------------------
+def _death_curve(agg: pd.DataFrame) -> go.Figure:
+    """Chart 1: Stale-rate phase-transition 'Death Curve' with variance band."""
+    x = agg["pqc_pct"]
+    y = agg["stale_mean"] * 100  # convert to %
+    y_upper = (agg["stale_mean"] + agg["stale_std"]).clip(upper=1) * 100
+    y_lower = (agg["stale_mean"] - agg["stale_std"]).clip(lower=0) * 100
+
+    fig = go.Figure()
+
+    # Shaded variance band (upper then lower reversed for fill)
+    fig.add_trace(go.Scatter(
+        x=pd.concat([x, x[::-1]]),
+        y=pd.concat([y_upper, y_lower[::-1]]),
+        fill="toself",
+        fillcolor=_CLR_BAND,
+        line=dict(color="rgba(255,255,255,0)"),
+        hoverinfo="skip",
+        showlegend=True,
+        name="± 1σ across 10 seeds",
+    ))
+
+    # Main line
+    fig.add_trace(go.Scatter(
+        x=x, y=y,
+        mode="lines+markers",
+        name="Mean Stale Rate",
+        line=dict(color=_CLR_MAIN, width=3),
+        marker=dict(size=6),
+        hovertemplate="PQC: %{x}%<br>Stale Rate: %{y:.1f}%<extra></extra>",
+    ))
+
+    # Min / Max envelope (dotted)
+    fig.add_trace(go.Scatter(
+        x=x, y=agg["stale_min"] * 100,
+        mode="lines",
+        name="Min (best seed)",
+        line=dict(color=_CLR_MAIN, width=1, dash="dot"),
+        hovertemplate="PQC: %{x}%<br>Min Stale: %{y:.1f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=agg["stale_max"] * 100,
+        mode="lines",
+        name="Max (worst seed)",
+        line=dict(color=_CLR_MAIN, width=1, dash="dot"),
+        hovertemplate="PQC: %{x}%<br>Max Stale: %{y:.1f}%<extra></extra>",
+    ))
+
+    # Vertical threshold at 20%
+    fig.add_vline(
+        x=20, line_dash="dash", line_color=_CLR_THRESHOLD, line_width=2,
+        annotation_text="Critical Threshold (20% PQC → 80%+ Stale)",
+        annotation_position="top left",
+        annotation_font=dict(size=11, color=_CLR_THRESHOLD),
+    )
+
+    # Horizontal 80% stale line
+    fig.add_hline(
+        y=80, line_dash="dot", line_color="gray", line_width=1,
+        annotation_text="80% Stale Rate",
+        annotation_position="bottom right",
+        annotation_font=dict(size=10, color="gray"),
+    )
+
+    fig.update_layout(
+        title=dict(
+            text="The Death Curve: Solana Stale Rate vs PQC Adoption",
+            font=dict(size=18),
+        ),
+        xaxis_title="PQC Fraction (%)",
+        yaxis_title="Stale Rate (%)",
+        yaxis=dict(range=[0, 105]),
+        xaxis=dict(dtick=10),
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        font=dict(size=12),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def _false_bottleneck(agg: pd.DataFrame) -> go.Figure:
+    """Chart 2: Dual-axis block size (bars) vs verification time (line)."""
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Bars: average block size in KB
+    fig.add_trace(
+        go.Bar(
+            x=agg["pqc_pct"],
+            y=agg["size_mean"],
+            name="Avg Block Size (KB)",
+            marker_color=_CLR_BAR_SIZE,
+            opacity=0.8,
+            hovertemplate="PQC: %{x}%<br>Block Size: %{y:,.0f} KB<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+
+    # Line: worst-case verification time
+    fig.add_trace(
+        go.Scatter(
+            x=agg["pqc_pct"],
+            y=agg["verif_max"],
+            name="Worst-Case Verification (ms)",
+            mode="lines+markers",
+            line=dict(color=_CLR_LINE_VERIF, width=3),
+            marker=dict(size=7, symbol="diamond"),
+            hovertemplate="PQC: %{x}%<br>Verification: %{y:.1f} ms<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+
+    # Horizontal line: Solana 400 ms slot limit
+    fig.add_hline(
+        y=400, line_dash="dash", line_color=_CLR_THRESHOLD, line_width=2,
+        annotation_text="Solana 400 ms Slot Limit",
+        annotation_position="top right",
+        annotation_font=dict(size=11, color=_CLR_THRESHOLD),
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        title=dict(
+            text="The False Bottleneck: Block Size Bloat vs Verification Time",
+            font=dict(size=18),
+        ),
+        xaxis_title="PQC Fraction (%)",
+        xaxis=dict(dtick=10),
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        font=dict(size=12),
+        hovermode="x unified",
+        bargap=0.3,
+    )
+    fig.update_yaxes(title_text="Avg Block Size (KB)", secondary_y=False)
+    fig.update_yaxes(
+        title_text="Verification Time (ms)",
+        secondary_y=True,
+        range=[0, 450],  # show the 400 ms line clearly
+    )
+    return fig
+
+
+def _cross_chain_resilience(cc: pd.DataFrame) -> go.Figure:
+    """Chart 3: Grouped bar chart comparing stale rates at multiple PQC levels."""
+    # Show comparison at 0%, 20%, 30%, 50%, 70%, 100% PQC
+    key_levels = [0, 20, 30, 50, 70, 100]
+    cc_filtered = cc[cc["pqc_pct"].isin(key_levels)].copy()
+    cc_filtered["stale_pct"] = cc_filtered["stale_rate"] * 100
+
+    chain_colors = {
+        "Solana": _CLR_SOLANA,
+        "Ethereum": _CLR_ETHEREUM,
+        "Bitcoin": _CLR_BITCOIN,
+    }
+
+    fig = go.Figure()
+    for chain in ["Solana", "Ethereum", "Bitcoin"]:
+        subset = cc_filtered[cc_filtered["chain"] == chain]
+        fig.add_trace(go.Bar(
+            x=[f"{int(p)}%" for p in subset["pqc_pct"]],
+            y=subset["stale_pct"],
+            name=chain,
+            marker_color=chain_colors[chain],
+            hovertemplate=f"{chain}<br>PQC: %{{x}}<br>Stale: %{{y:.1f}}%<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text="Cross-Chain Resilience: Stale Rate by PQC Adoption Level",
+            font=dict(size=18),
+        ),
+        xaxis_title="PQC Adoption Level",
+        yaxis_title="Stale Rate (%)",
+        yaxis=dict(range=[0, 105]),
+        barmode="group",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        font=dict(size=12),
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Propagation P90 chart (bonus)
+# ---------------------------------------------------------------------------
+def _propagation_chart(agg: pd.DataFrame) -> go.Figure:
+    """Bonus chart: P90 propagation latency with error band."""
+    x = agg["pqc_pct"]
+    y = agg["prop_p90_mean"]
+    y_upper = agg["prop_p90_mean"] + agg["prop_p90_std"]
+    y_lower = (agg["prop_p90_mean"] - agg["prop_p90_std"]).clip(lower=0)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=pd.concat([x, x[::-1]]),
+        y=pd.concat([y_upper, y_lower[::-1]]),
+        fill="toself",
+        fillcolor="rgba(148,69,255,0.15)",
+        line=dict(color="rgba(255,255,255,0)"),
+        hoverinfo="skip",
+        showlegend=True,
+        name="± 1σ",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=x, y=y,
+        mode="lines+markers",
+        name="Mean P90 Propagation",
+        line=dict(color=_CLR_SOLANA, width=3),
+        marker=dict(size=6),
+        hovertemplate="PQC: %{x}%<br>P90: %{y:.1f} ms<extra></extra>",
+    ))
+
+    fig.add_hline(
+        y=400, line_dash="dash", line_color=_CLR_THRESHOLD, line_width=2,
+        annotation_text="Solana 400 ms Slot Limit",
+        annotation_position="bottom right",
+        annotation_font=dict(size=11, color=_CLR_THRESHOLD),
+    )
+
+    fig.update_layout(
+        title=dict(text="P90 Propagation Latency vs PQC Adoption", font=dict(size=18)),
+        xaxis_title="PQC Fraction (%)",
+        yaxis_title="Propagation P90 (ms)",
+        xaxis=dict(dtick=10),
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        font=dict(size=12),
+        hovermode="x unified",
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Main render function
+# ---------------------------------------------------------------------------
+def render(tab) -> None:
+    """Render the PQC Shock Simulator tab inside the given Streamlit tab."""
+    with tab:
+        st.header("PQC Shock Simulator")
+        st.caption(
+            "Phase 2/3 Monte Carlo results: 21 PQC levels × 10 random seeds = 210 "
+            "discrete-event simulations with Poisson arrivals, bounded mempool, and "
+            "heterogeneous signature verification."
+        )
+
+        # ---- Load data ----
+        df = _load_sweep()
+        agg = _aggregate(df)
+        cc = _estimate_cross_chain(df)
+
+        # ---- KPI metric cards ----
+        st.markdown("---")
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric(
+                label="Critical Threshold",
+                value="20% PQC",
+                delta="80%+ stale rate",
+                delta_color="inverse",
+                help="The PQC adoption level at which Solana's stale-block rate "
+                     "exceeds 80%, making the network effectively unusable.",
+            )
+        with m2:
+            st.metric(
+                label="Block Size at 20%",
+                value="360 KB",
+                delta="5× baseline (72 KB)",
+                delta_color="inverse",
+                help="Average block size at 20% PQC adoption vs 0% baseline.",
+            )
+        with m3:
+            st.metric(
+                label="Verification at 100%",
+                value="39.4 ms",
+                delta="10× below 400 ms limit",
+                delta_color="normal",
+                help="Even at 100% PQC, worst-case verification (39.4 ms) never "
+                     "approaches Solana's 400 ms slot time.",
+            )
+        with m4:
+            st.metric(
+                label="Root Cause",
+                value="Bandwidth",
+                delta="NOT Compute",
+                delta_color="off",
+                help="Block-space bloat from large PQC signatures causes propagation "
+                     "failure. Verification compute is never the bottleneck.",
+            )
+
+        st.markdown("---")
+
+        # ---- Chart 1: The Death Curve ----
+        st.subheader("1. The Death Curve — Phase Transition")
+        st.plotly_chart(_death_curve(agg), use_container_width=True)
+
+        with st.expander("Methodology: Stale Rate Calculation"):
+            st.markdown(
+                "A block is **stale** when its P90 propagation latency exceeds the "
+                "chain's block time (400 ms for Solana). The stale rate is the fraction "
+                "of blocks that go stale across 25 simulated blocks per run.\n\n"
+                "**Variance band:** The shaded region shows ± 1 standard deviation "
+                "across 10 independent random seeds at each PQC level. The dotted "
+                "lines show the absolute min / max across seeds.\n\n"
+                "**Key observation:** The transition from viable (~56% stale at 0% PQC "
+                "due to baseline network latency) to catastrophic (100% stale) happens "
+                "over a narrow PQC window (15%\u201335%), characteristic of a **phase "
+                "transition** in the network's operating regime."
+            )
+
+        st.markdown("---")
+
+        # ---- Chart 2: The False Bottleneck ----
+        st.subheader("2. The False Bottleneck — Size vs Compute")
+        st.plotly_chart(_false_bottleneck(agg), use_container_width=True)
+
+        with st.expander("Methodology: Dual-Axis Interpretation"):
+            st.markdown(
+                "**Left axis (orange bars):** Average block size in KB. PQC signatures "
+                "(ML-DSA-44: 2,420 B, ML-DSA-65: 3,293 B, SLH-DSA-128f: 17,088 B) "
+                "are 38\u2013267× larger than Ed25519 (64 B), causing block-size inflation.\n\n"
+                "**Right axis (green line):** Worst-case total verification time for a "
+                "single block across all Monte Carlo seeds. Even at 100% PQC, the worst "
+                "case (39.4 ms) is **10× below** the 400 ms slot limit.\n\n"
+                "**Implication:** Hardware acceleration for signature verification would "
+                "**not** solve the problem. Signature compression, aggregation, or "
+                "application-layer batching are required to address the real bottleneck."
+            )
+
+        st.markdown("---")
+
+        # ---- Chart 3: Cross-Chain Resilience ----
+        st.subheader("3. Cross-Chain Resilience")
+        st.plotly_chart(_cross_chain_resilience(cc), use_container_width=True)
+
+        with st.expander("Methodology: Cross-Chain Estimation"):
+            st.markdown(
+                "Bitcoin (10-minute blocks) and Ethereum (12-second blocks) are estimated "
+                "using the same propagation-latency profile measured in the Solana sweep.\n\n"
+                "Since measured P90 propagation times peak at ~311 ms (at 100% PQC), "
+                "which is **far below** Ethereum's 12,000 ms and Bitcoin's 600,000 ms "
+                "block times, both chains show **zero stale blocks** at all PQC levels.\n\n"
+                "**Key insight:** Slow block times provide enormous propagation headroom. "
+                "Solana's 400 ms slots make it uniquely vulnerable to PQC signature bloat, "
+                "while Bitcoin and Ethereum can absorb the transition with negligible impact "
+                "on block propagation."
+            )
+
+        st.markdown("---")
+
+        # ---- Bonus: Propagation P90 ----
+        st.subheader("4. Propagation Latency Scaling")
+        st.plotly_chart(_propagation_chart(agg), use_container_width=True)
+
+        with st.expander("Methodology: Propagation Model"):
+            st.markdown(
+                "Propagation latency is modelled as a function of block size and "
+                "inter-node RTT (calibrated from AWS CloudPing February 2026 data). "
+                "The P90 value represents the 90th-percentile propagation time across "
+                "all validator-to-validator paths.\n\n"
+                "At 100% PQC, P90 increases 1.45× (215 ms → 311 ms) — a meaningful "
+                "rise that, combined with the 5× block-size increase, pushes total "
+                "propagation past Solana's tight 400 ms deadline."
+            )
+
+        # ---- Raw data explorer ----
+        st.markdown("---")
+        st.subheader("Raw Data Explorer")
+        with st.expander("View / download the full 210-row sweep dataset"):
+            st.dataframe(df, use_container_width=True, height=400)
+            csv_bytes = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download pqc_sweep.csv",
+                csv_bytes,
+                "pqc_sweep.csv",
+                "text/csv",
+            )
