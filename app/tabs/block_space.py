@@ -77,23 +77,23 @@ _ETHEREUM_PRESETS = {
         "eth_base_overhead": ETHEREUM_BASE_TX_OVERHEAD,
         "eth_block_time": ETHEREUM_BLOCK_TIME_MS,
     },
-    "36M Gas (2025)": {
-        "eth_gas_limit": ETHEREUM_GAS_LIMITS["2025_current"],
+    "36M Gas (Feb 2025)": {
+        "eth_gas_limit": ETHEREUM_GAS_LIMITS["2025_feb"],
         "eth_base_overhead": ETHEREUM_BASE_TX_OVERHEAD,
         "eth_block_time": ETHEREUM_BLOCK_TIME_MS,
     },
-    "60M Gas (Q1 2026)": {
-        "eth_gas_limit": ETHEREUM_GAS_LIMITS["2026_q1"],
+    "60M Gas (Nov 2025, Fusaka)": {
+        "eth_gas_limit": ETHEREUM_GAS_LIMITS["2025_nov_fusaka"],
         "eth_base_overhead": ETHEREUM_BASE_TX_OVERHEAD,
         "eth_block_time": ETHEREUM_BLOCK_TIME_MS,
     },
-    "80M Gas (Q2 2026)": {
-        "eth_gas_limit": ETHEREUM_GAS_LIMITS["2026_q2"],
-        "eth_base_overhead": ETHEREUM_BASE_TX_OVERHEAD,
-        "eth_block_time": ETHEREUM_BLOCK_TIME_MS,
-    },
-    "180M Gas (Target)": {
+    "100M Gas (2026 Target)": {
         "eth_gas_limit": ETHEREUM_GAS_LIMITS["2026_target"],
+        "eth_base_overhead": ETHEREUM_BASE_TX_OVERHEAD,
+        "eth_block_time": ETHEREUM_BLOCK_TIME_MS,
+    },
+    "200M Gas (Long-Term)": {
+        "eth_gas_limit": ETHEREUM_GAS_LIMITS["long_term_target"],
         "eth_base_overhead": ETHEREUM_BASE_TX_OVERHEAD,
         "eth_block_time": ETHEREUM_BLOCK_TIME_MS,
     },
@@ -404,6 +404,12 @@ def _render_results_table(comp, chain_key: str, num_signers: int) -> None:
             "Impact": impact,
         })
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+    st.info(
+        "**So what?** This shows how many transactions fit in one block when using each "
+        "signature scheme. The 'vs Baseline' column is the key metric — any value below "
+        "100% means fewer transactions per block, directly reducing the chain's throughput.",
+        icon="💡",
+    )
 
     csv_data = pd.DataFrame([
         {

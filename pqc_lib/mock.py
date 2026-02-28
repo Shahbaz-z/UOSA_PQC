@@ -87,20 +87,20 @@ KEM_PARAMS = {
 # uniquely compact signatures.
 SIG_PARAMS = {
     # FIPS 204 -- ML-DSA
-    "ML-DSA-44": {
+    "ML-DSA-44": {                   # FIPS 204, Table 2
         "public_key": 1312,
-        "secret_key": 2528,
+        "secret_key": 2560,             # Was 2528 (pre-FIPS Dilithium value)
         "signature": 2420,
     },
-    "ML-DSA-65": {
+    "ML-DSA-65": {                   # FIPS 204, Table 2
         "public_key": 1952,
-        "secret_key": 4000,
-        "signature": 3293,
+        "secret_key": 4032,             # Was 4000 (pre-FIPS Dilithium value)
+        "signature": 3309,              # Was 3293 (pre-FIPS Dilithium value)
     },
-    "ML-DSA-87": {
+    "ML-DSA-87": {                   # FIPS 204, Table 2
         "public_key": 2592,
-        "secret_key": 4864,
-        "signature": 4595,
+        "secret_key": 4896,             # Was 4864 (pre-FIPS Dilithium value)
+        "signature": 4627,              # Was 4595 (pre-FIPS Dilithium value)
     },
     # FIPS 205 -- SLH-DSA (SPHINCS+)
     "SLH-DSA-128s": {

@@ -15,6 +15,9 @@ from blockchain.chain_models import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
     SIGNATURE_SIZES,
     SOLANA_VOTE_TX_PCT_REALISTIC,
+    SOLANA_BLOCK_SIZE_BYTES,
+    SOLANA_BASE_TX_OVERHEAD,
+    SOLANA_SLOT_TIME_MS,
 )
 from app.utils import format_bytes, throughput_impact_category, threat_badge, CHAIN_COLORS
 
@@ -117,6 +120,61 @@ def render(tab, chain_quantum_context: dict) -> None:
             )
 
         st.divider()
+        st.subheader("See the Difference: Classical vs Post-Quantum")
+        st.caption("Toggle between classical and PQC to see the impact on a single Solana block.")
+
+        toggle_mode = st.radio(
+            "Signature scheme",
+            ["Classical (Ed25519)", "Post-Quantum (ML-DSA-65)"],
+            horizontal=True,
+            key="pqc_toggle",
+        )
+
+        # Compute values
+        if toggle_mode == "Classical (Ed25519)":
+            sig_name = "Ed25519"
+            sig_size = 64
+            color = "#2ca02c"  # green
+        else:
+            sig_name = "ML-DSA-65"
+            sig_size = 3309  # FIPS 204
+            color = "#d62728"  # red
+
+        available_space = int(SOLANA_BLOCK_SIZE_BYTES * 0.30)  # 30% for user txs after votes
+        tx_size = SOLANA_BASE_TX_OVERHEAD + sig_size
+        txs_per_block = available_space // tx_size
+        tps = txs_per_block / (SOLANA_SLOT_TIME_MS / 1000)
+
+        tc1, tc2, tc3, tc4 = st.columns(4)
+        with tc1:
+            st.metric("Signature Size", f"{sig_size:,} B")
+        with tc2:
+            st.metric("Transaction Size", f"{tx_size:,} B")
+        with tc3:
+            st.metric("Txs per Block", f"{txs_per_block:,}")
+        with tc4:
+            st.metric("Throughput", f"{tps:,.0f} TPS")
+
+        # Show the impact
+        if toggle_mode != "Classical (Ed25519)":
+            ed_tx = SOLANA_BASE_TX_OVERHEAD + 64
+            ed_txs = available_space // ed_tx
+            retention = txs_per_block / ed_txs
+            st.warning(
+                f"Switching from Ed25519 to {sig_name} reduces Solana throughput to "
+                f"**{retention:.0%}** of baseline \u2014 a **{(1-retention)*100:.0f}% drop** "
+                f"from {ed_txs:,} to {txs_per_block:,} transactions per block. "
+                f"Each signature grows from 64 B to {sig_size:,} B ({sig_size//64}\u00d7 larger).",
+                icon="\u26a0\ufe0f"
+            )
+        else:
+            st.success(
+                "Ed25519 is the current Solana baseline. "
+                "Toggle to Post-Quantum to see the throughput impact.",
+                icon="\u2705"
+            )
+
+        st.divider()
 
         # ---- Chain Vulnerability at a Glance ----
         st.subheader("Chain Vulnerability at a Glance")
@@ -145,6 +203,13 @@ def render(tab, chain_quantum_context: dict) -> None:
             "switching to a PQC signature scheme. Solana uses realistic (70% vote overhead) parameters."
         )
         st.plotly_chart(_retention_heatmap(sol_comp, btc_comp, eth_comp), use_container_width=True)
+        st.info(
+            "**So what?** This heatmap shows the percentage of current throughput each chain "
+            "retains after switching to PQC signatures. Green = minimal impact, red = severe. "
+            "Notice Falcon-512 stays green across all chains (retaining 80-90%), while SLH-DSA-128s "
+            "drops to under 5% on Solana \u2014 meaning 95% of transactions would no longer fit in a block.",
+            icon="\U0001f4a1"
+        )
 
         st.divider()
 
@@ -160,6 +225,11 @@ def render(tab, chain_quantum_context: dict) -> None:
         with bc3:
             st.metric("Ethereum (ECDSA)", f"{eth_comp.baseline.throughput_tps:,.2f} TPS")
             st.caption(f"{eth_comp.baseline.txs_per_block:,} txs/block (30M gas, 12s)")
+        st.info(
+            "**So what?** These are the throughput numbers the network achieves today with classical "
+            "signatures. Every PQC scheme will reduce these numbers. The question is: by how much?",
+            icon="\U0001f4a1"
+        )
 
         st.divider()
 

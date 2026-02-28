@@ -123,8 +123,22 @@ def render(tab) -> None:
             chart_c1, chart_c2 = st.columns(2)
             with chart_c1:
                 st.plotly_chart(signature_size_bar_chart(sig_results), use_container_width=True)
+                st.info(
+                    "**So what?** This shows the raw size of each PQC signature in bytes. "
+                    "Ed25519 (classical) is just 64 bytes. ML-DSA-65 is 3,309 bytes (52× larger), "
+                    "and SLH-DSA-128f is 17,088 bytes (267× larger). In a block of 2,000 transactions, "
+                    "that difference translates from 128 KB to 6.6 MB of just signatures — potentially "
+                    "exceeding the entire block capacity.",
+                    icon="💡",
+                )
             with chart_c2:
                 st.plotly_chart(performance_grouped_bar_chart(results), use_container_width=True)
+                st.info(
+                    "**So what?** Verification speed determines how quickly nodes can validate blocks. "
+                    "Faster verification = less delay = healthier network. Falcon-512 and ML-DSA-44 "
+                    "verify fastest among PQC schemes, while SLH-DSA variants are orders of magnitude slower.",
+                    icon="💡",
+                )
 
             # Download
             dl_df = pd.DataFrame([

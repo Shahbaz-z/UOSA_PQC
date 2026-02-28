@@ -552,6 +552,12 @@ def render(tab) -> None:
         # ---- Chart 1: The Death Curve ----
         st.subheader("1. The Death Curve — Phase Transition")
         st.plotly_chart(_death_curve(agg), use_container_width=True)
+        st.info(
+            "**So what?** This is the critical chart. As PQC adoption increases, blocks get larger "
+            "and take longer to propagate. At ~89% PQC, stale rates exceed 30% — meaning nearly "
+            "one in three blocks is wasted. The shaded band shows variance across 10 Monte Carlo seeds.",
+            icon="💡",
+        )
 
         with st.expander("Methodology: Stale Rate Calculation"):
             st.markdown(
@@ -575,6 +581,13 @@ def render(tab) -> None:
         # ---- Chart 2: The False Bottleneck ----
         st.subheader("2. The False Bottleneck — Size vs Compute")
         st.plotly_chart(_false_bottleneck(agg), use_container_width=True)
+        st.info(
+            "**So what?** This disproves a common assumption. Many expect PQC to fail because of slow "
+            "verification. In reality, even at 100% PQC, verification takes only 31.7 ms (well within "
+            "the 400 ms slot). The real problem is block-size bloat — blocks grow 21× larger, "
+            "causing propagation delays.",
+            icon="💡",
+        )
 
         with st.expander("Methodology: Dual-Axis Interpretation"):
             st.markdown(
@@ -598,6 +611,12 @@ def render(tab) -> None:
         # ---- Chart 3: Cross-Chain Resilience ----
         st.subheader("3. Cross-Chain Resilience")
         st.plotly_chart(_cross_chain_resilience(cc), use_container_width=True)
+        st.info(
+            "**So what?** Not all chains are equally vulnerable. Bitcoin's 10-minute blocks and "
+            "Ethereum's 12-second blocks provide much more propagation budget than Solana's 400 ms slots. "
+            "Solana fails first because it has the tightest timing constraints.",
+            icon="💡",
+        )
 
         with st.expander("Methodology: Cross-Chain Estimation"):
             st.markdown(
@@ -617,6 +636,12 @@ def render(tab) -> None:
         # ---- Bonus: Propagation P90 ----
         st.subheader("4. Propagation Latency Scaling")
         st.plotly_chart(_propagation_chart(agg), use_container_width=True)
+        st.info(
+            "**So what?** P90 means 90% of blocks propagate within this time. At 100% PQC, Solana's "
+            "P90 propagation reaches 341 ms — consuming 85% of the 400 ms slot budget. This leaves "
+            "almost no margin for network jitter or validator delays.",
+            icon="💡",
+        )
 
         with st.expander("Methodology: Propagation Model"):
             st.markdown(

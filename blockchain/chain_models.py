@@ -37,9 +37,9 @@ SIGNATURE_SIZES: Dict[str, int] = {
     "Schnorr": 64,  # BIP 340 (Bitcoin Taproot) - fixed size
     "BLS12-381": 96,  # BLS signature (two G1 points, Ethereum consensus)
     # FIPS 204 -- ML-DSA
-    "ML-DSA-44": 2_420,
-    "ML-DSA-65": 3_293,
-    "ML-DSA-87": 4_595,
+    "ML-DSA-44": 2_420,       # FIPS 204, Table 2
+    "ML-DSA-65": 3_309,       # FIPS 204, Table 2 (was 3,293 pre-FIPS)
+    "ML-DSA-87": 4_627,       # FIPS 204, Table 2 (was 4,595 pre-FIPS)
     # FIPS 205 -- SLH-DSA (SPHINCS+) - all 6 parameter sets
     "SLH-DSA-128s": 7_856,
     "SLH-DSA-128f": 17_088,
@@ -52,8 +52,8 @@ SIGNATURE_SIZES: Dict[str, int] = {
     "Falcon-1024": 1_280,
     # Hybrid (Ed25519 + PQC)
     "Hybrid-Ed25519+ML-DSA-44": 64 + 2_420,
-    "Hybrid-Ed25519+ML-DSA-65": 64 + 3_293,
-    "Hybrid-Ed25519+ML-DSA-87": 64 + 4_595,
+    "Hybrid-Ed25519+ML-DSA-65": 64 + 3_309,
+    "Hybrid-Ed25519+ML-DSA-87": 64 + 4_627,
     "Hybrid-Ed25519+Falcon-512": 64 + 666,
     "Hybrid-Ed25519+Falcon-1024": 64 + 1_280,
 }
@@ -117,12 +117,15 @@ ETHEREUM_BASE_TX_OVERHEAD = 120  # non-signature calldata (to, value, nonce etc.
 
 # Ethereum gas limit presets (2024-2026 planned increases)
 # Source: Ethereum core dev discussions, EIP-4844 follow-ups
+# Source: Ethereum Foundation 2026 priorities (Feb 2026),
+#   https://coinmarketcap.com/academy/article/ethereum-targets-quantum-resistance-and-higher-gas-limits-in-2026
+#   https://ens.domains/blog/post/ens-staying-on-ethereum ("targeting 200M")
 ETHEREUM_GAS_LIMITS: Dict[str, int] = {
-    "2024_baseline": 30_000_000,
-    "2025_current": 36_000_000,
-    "2026_q1": 60_000_000,
-    "2026_q2": 80_000_000,
-    "2026_target": 180_000_000,
+    "2024_baseline": 30_000_000,      # 30M (2024 baseline, confirmed)
+    "2025_feb": 36_000_000,           # 36M (Feb 2025, first PoS increase)
+    "2025_nov_fusaka": 60_000_000,    # 60M (Nov 2025, post-Fusaka, confirmed)
+    "2026_target": 100_000_000,       # 100M+ (EF 2026 priority, under development)
+    "long_term_target": 200_000_000,  # 200M (core dev target, per ENS blog Feb 2026)
 }
 
 # ---------------------------------------------------------------------------

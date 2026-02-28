@@ -201,6 +201,22 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
+# TL;DR Executive Summary
+# ---------------------------------------------------------------------------
+st.markdown("---")
+col_tldr1, col_tldr2, col_tldr3 = st.columns(3)
+with col_tldr1:
+    st.metric("The Problem", "10-700×", help="PQC signatures are 10-700× larger than classical ones")
+    st.caption("PQC signatures are 10-700× larger than classical, directly reducing blockchain throughput")
+with col_tldr2:
+    st.metric("The Finding", "~89% PQC → Failure", help="At ~89% PQC adoption, Solana's stale rate exceeds 30%")
+    st.caption("Block-size bloat (not computation) is the bottleneck — propagation delay causes stale blocks")
+with col_tldr3:
+    st.metric("The Solution", "Falcon-512", help="Smallest PQC signature retains most throughput")
+    st.caption("Falcon-512 (666 B) retains ~80% throughput. ML-DSA-65 (3.3 KB, NIST recommended) retains ~62%")
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
 # Tab layout -- NEW order: Overview → Algorithms → Block-Space → PQC Shock
 # ---------------------------------------------------------------------------
 tab_overview, tab_compare, tab_block, tab_shock = st.tabs([
