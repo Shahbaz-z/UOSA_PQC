@@ -10,6 +10,7 @@ from blockchain.chain_models import (
     compare_all_bitcoin,
     compare_all_ethereum,
     SIGNATURE_SIZES,
+    PUBLIC_KEY_SIZES,
     SOLANA_SIG_TYPES,
     BITCOIN_SIG_TYPES,
     ETHEREUM_SIG_TYPES,
@@ -29,7 +30,7 @@ class TestSolanaBlockSpace:
     def test_ed25519_baseline(self):
         result = analyze_solana_block_space("Ed25519")
         assert result.signature_bytes == SIGNATURE_SIZES["Ed25519"]
-        assert result.tx_size_bytes == SOLANA_BASE_TX_OVERHEAD + SIGNATURE_SIZES["Ed25519"]
+        assert result.tx_size_bytes == SOLANA_BASE_TX_OVERHEAD + SIGNATURE_SIZES["Ed25519"] + PUBLIC_KEY_SIZES["Ed25519"]
         assert result.relative_to_baseline == 1.0
 
     def test_ml_dsa_65_smaller_throughput(self):
@@ -52,13 +53,15 @@ class TestSolanaBlockSpace:
 
     def test_txs_per_block_calculation(self):
         result = analyze_solana_block_space("Ed25519")
-        expected = SOLANA_BLOCK_SIZE_BYTES // (SOLANA_BASE_TX_OVERHEAD + SIGNATURE_SIZES["Ed25519"])
+        expected = SOLANA_BLOCK_SIZE_BYTES // (SOLANA_BASE_TX_OVERHEAD + SIGNATURE_SIZES["Ed25519"] + PUBLIC_KEY_SIZES["Ed25519"])
         assert result.txs_per_block == expected
 
     def test_signature_overhead_percentage(self):
         result = analyze_solana_block_space("ML-DSA-87")
         sig_size = SIGNATURE_SIZES["ML-DSA-87"]
-        expected_pct = round(sig_size / (SOLANA_BASE_TX_OVERHEAD + sig_size) * 100, 2)
+        pk_size = PUBLIC_KEY_SIZES["ML-DSA-87"]
+        tx_size = SOLANA_BASE_TX_OVERHEAD + sig_size + pk_size
+        expected_pct = round(sig_size / tx_size * 100, 2)
         assert result.signature_overhead_pct == expected_pct
 
     @pytest.mark.parametrize("sig_type", SOLANA_SIG_TYPES)
@@ -70,7 +73,7 @@ class TestSolanaBlockSpace:
 
     def test_custom_parameters(self):
         result = analyze_solana_block_space("Ed25519", block_size=1_000_000, base_tx_overhead=100)
-        expected_txs = 1_000_000 // (100 + SIGNATURE_SIZES["Ed25519"])
+        expected_txs = 1_000_000 // (100 + SIGNATURE_SIZES["Ed25519"] + PUBLIC_KEY_SIZES["Ed25519"])
         assert result.txs_per_block == expected_txs
 
     def test_multi_signer(self):

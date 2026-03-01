@@ -8,7 +8,6 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import pandas as pd
-import numpy as np
 
 df = pd.read_csv("results/pqc_sweep.csv")
 

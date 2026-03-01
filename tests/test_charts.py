@@ -19,7 +19,6 @@ from app.components.charts import (
     block_space_chart,
     throughput_comparison_chart,
     signature_size_comparison,
-    side_by_side_dual_axis_chart,
 )
 
 
@@ -90,27 +89,4 @@ class TestSignatureSizeComparison:
         assert len(fig.data) > 0
 
 
-# ---------------------------------------------------------------------------
-# Side-by-side comparison chart
-# ---------------------------------------------------------------------------
 
-class TestSideBySideDualAxisChart:
-    def test_returns_figure(self):
-        # Minimal mock results dict
-        from pqc_lib.signatures import sign_keygen, sign
-        kp = sign_keygen("Ed25519")
-        sr = sign("Ed25519", kp.secret_key, b"test", kp)
-        results = {"Ed25519": sr}
-        fig = side_by_side_dual_axis_chart(results)
-        assert isinstance(fig, go.Figure)
-
-    def test_multiple_algorithms(self):
-        from pqc_lib.signatures import sign_keygen, sign
-        results = {}
-        for algo in ["Ed25519", "ML-DSA-44"]:
-            kp = sign_keygen(algo)
-            sr = sign(algo, kp.secret_key, b"test", kp)
-            results[algo] = sr
-        fig = side_by_side_dual_axis_chart(results)
-        assert isinstance(fig, go.Figure)
-        assert len(fig.data) >= 2  # at least size and time traces

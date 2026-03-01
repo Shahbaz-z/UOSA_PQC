@@ -69,7 +69,6 @@ class TestImportsWork:
             block_space_chart,
             throughput_comparison_chart,
             signature_size_comparison,
-            side_by_side_dual_axis_chart,
         )
         assert callable(block_space_chart)
 

@@ -8,7 +8,6 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import pandas as pd
-import numpy as np
 
 df = pd.read_csv("results/pqc_sweep.csv")
 
@@ -78,11 +77,11 @@ if not stale_80.empty:
           f"({stale_80.iloc[0]['avg_block_size']/baseline_bs:.1f}× baseline)")
 
 # 3. Stale rate doubles from baseline
-stale_double = agg[agg["avg_stale"] >= baseline_stale * 1.5]
-if not stale_double.empty:
-    t = stale_double.iloc[0]["pqc_fraction"]
+stale_50pct_above = agg[agg["avg_stale"] >= baseline_stale * 1.5]
+if not stale_50pct_above.empty:
+    t = stale_50pct_above.iloc[0]["pqc_fraction"]
     print(f"\n⚠  STALE RATE 50% above baseline at PQC = {t:.0%}")
-    print(f"   Baseline: {baseline_stale:.2%} → {stale_double.iloc[0]['avg_stale']:.2%}")
+    print(f"   Baseline: {baseline_stale:.2%} → {stale_50pct_above.iloc[0]['avg_stale']:.2%}")
 
 # 4. Block-size bloat thresholds
 for multiplier, label in [(5, "5×"), (10, "10×"), (15, "15×"), (20, "20×")]:
