@@ -217,7 +217,7 @@ def _render_solana_section(num_signers: int):
     _apply_preset(_SOLANA_PRESETS[scenario])
 
     # Initialise defaults via setdefault (clean Streamlit pattern)
-    st.session_state.setdefault("sol_vote_pct", 0)
+    st.session_state.setdefault("sol_vote_pct", 70)
     st.session_state.setdefault("sol_block_size", SOLANA_BLOCK_SIZE_BYTES)
     st.session_state.setdefault("sol_base_overhead", SOLANA_BASE_TX_OVERHEAD)
     st.session_state.setdefault("sol_slot_time", SOLANA_SLOT_TIME_MS)
@@ -271,8 +271,8 @@ def _render_bitcoin_section(num_signers: int):
             "**SegWit discount (BIP 141):** Witness data (signatures + public keys) "
             "counts at **1/4 weight**, while non-witness data counts at full weight. "
             "This partially offsets the size increase of PQC signatures.\n\n"
-            "**Example:** A 3,293-byte ML-DSA-65 signature costs 3,293 weight units "
-            "under SegWit, compared to 13,172 WU without the discount."
+            "**Example:** A 3,309-byte ML-DSA-65 signature costs 3,309 weight units "
+            "under SegWit, compared to 13,236 WU without the discount."
         )
 
     scenario = st.selectbox(
@@ -329,7 +329,7 @@ def _render_ethereum_section(num_signers: int):
             "- **21,000 gas** base intrinsic cost\n"
             "- **16 gas per non-zero byte** of calldata (signature + public key)\n\n"
             "**2026 Gas Limit Increases:** Ethereum is increasing block gas limits from "
-            "30M (2024) to potentially 180M by late 2026. Use presets to model future capacity."
+            "30M (2024) \u2192 60M (current) \u2192 100M+ (roadmap target). Use presets to model future capacity."
         )
 
     scenario = st.selectbox(
@@ -352,7 +352,7 @@ def _render_ethereum_section(num_signers: int):
             "Block gas limit",
             min_value=1_000_000, max_value=200_000_000, step=5_000_000,
             key="eth_gas_limit",
-            help="Ethereum block gas limit (30M baseline, up to 180M by 2026)",
+            help="Ethereum block gas limit (30M baseline, 60M current, 100M+ roadmap target)",
         )
         eth_base_overhead = st.number_input(
             "Base tx overhead (bytes)",
@@ -406,9 +406,9 @@ def _render_results_table(comp, chain_key: str, num_signers: int) -> None:
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
     st.info(
         "**So what?** This shows how many transactions fit in one block when using each "
-        "signature scheme. The 'vs Baseline' column is the key metric — any value below "
+        "signature scheme. The 'vs Baseline' column is the key metric \u2014 any value below "
         "100% means fewer transactions per block, directly reducing the chain's throughput.",
-        icon="💡",
+        icon="\U0001f4a1",
     )
 
     csv_data = pd.DataFrame([
@@ -433,10 +433,10 @@ def _render_results_table(comp, chain_key: str, num_signers: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Key Findings — now rendered ABOVE charts
+# Key Findings \u2014 now rendered ABOVE charts
 # ---------------------------------------------------------------------------
 def _render_key_findings(comp, chain: str) -> None:
-    """Render key findings metric cards — placed directly after the results table."""
+    """Render key findings metric cards \u2014 placed directly after the results table."""
     st.divider()
     st.subheader("Key Findings")
     baseline = comp.baseline
@@ -478,12 +478,12 @@ def _render_key_findings(comp, chain: str) -> None:
         f"Falcon-512 signatures (**{falcon_size} B**) are **{falcon_ratio}x smaller** "
         f"than ML-DSA-44 (**{mldsa_size:,} B**), making Falcon the most block-space "
         "efficient PQC signature scheme for blockchain applications.",
-        icon="💡",
+        icon="\U0001f4a1",
     )
 
 
 # ---------------------------------------------------------------------------
-# Charts — now rendered BELOW key findings
+# Charts \u2014 now rendered BELOW key findings
 # ---------------------------------------------------------------------------
 def _render_charts(comp, chain: str) -> None:
     """Render the three Plotly charts."""

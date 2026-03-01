@@ -1,7 +1,7 @@
 """Shared helper functions and constants for the Streamlit UI.
 
 Centralises utilities that were previously duplicated across
-block_space.py, comparison.py, and cross_chain.py.
+block_space.py, comparison.py, and overview.py and pqc_shock_sim.py.
 """
 
 from __future__ import annotations

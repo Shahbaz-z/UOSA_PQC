@@ -1,4 +1,4 @@
-"""Tab 1: Overview — landing page with onboarding, vulnerability context, and
+"""Tab 1: Overview \u2014 landing page with onboarding, vulnerability context, and
 cross-chain throughput comparison.
 
 Merges the old Cross-Chain Summary tab (Tab 3) with a new introductory section
@@ -13,7 +13,6 @@ import plotly.graph_objects as go
 
 from blockchain.chain_models import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
-    SIGNATURE_SIZES,
     SOLANA_VOTE_TX_PCT_REALISTIC,
     SOLANA_BLOCK_SIZE_BYTES,
     SOLANA_BASE_TX_OVERHEAD,
@@ -25,7 +24,7 @@ from app.utils import format_bytes, throughput_impact_category, threat_badge, CH
 # ---------------------------------------------------------------------------
 # Cached computation (eliminates redundant recomputation on re-renders)
 # ---------------------------------------------------------------------------
-@st.cache_data(show_spinner="Computing cross-chain analyses …")
+@st.cache_data(show_spinner="Computing cross-chain analyses \u2026")
 def _get_default_analyses():
     """Run all three chain analyses with default parameters (cached)."""
     return (
@@ -39,7 +38,7 @@ def _get_default_analyses():
 # Heatmap chart (replaces the plain table from old Tab 3)
 # ---------------------------------------------------------------------------
 def _retention_heatmap(sol_comp, btc_comp, eth_comp) -> go.Figure:
-    """Create a throughput-retention heatmap: algorithms × chains."""
+    """Create a throughput-retention heatmap: algorithms \u00d7 chains."""
     highlight_algos = ["Falcon-512", "ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "SLH-DSA-128s"]
     chains = ["Solana", "Bitcoin", "Ethereum"]
     comps = [sol_comp, btc_comp, eth_comp]
@@ -99,7 +98,7 @@ def render(tab, chain_quantum_context: dict) -> None:
             "then explore the **Algorithms** tab to benchmark PQC schemes, the **Block-Space** "
             "tab for per-chain impact, and the **PQC Shock** tab for Monte Carlo network "
             "simulation results.",
-            icon="🧭",
+            icon="\U0001f9ed",
         )
 
         # ---- Two-column intro ----
@@ -184,9 +183,8 @@ def render(tab, chain_quantum_context: dict) -> None:
             [ov1, ov2, ov3],
             chain_quantum_context.items(),
         ):
-            color = CHAIN_COLORS.get(chain_name, "#666666")
             with col:
-                st.markdown(f"### :{color.lstrip('#')}[{chain_name}]" if False else f"**{chain_name}**")
+                st.markdown(f"**{chain_name}**")
                 # Use colored circle emoji to approximate brand color
                 st.markdown(f"**Current:** {ctx['current_sig']}")
                 st.markdown(f"**Threat:** {threat_badge(ctx['quantum_threat'])}")
