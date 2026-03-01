@@ -53,7 +53,7 @@ SWEEPS = {
 
 # Shared parameters (matching original sweep)
 CHAIN = "solana"
-LAMBDA_TPS = 500.0
+LAMBDA_TPS = 4000.0  # Must exceed block capacity under PQC to test saturation
 MEMPOOL_BYTES = 100 * 1024 * 1024
 NUM_VALIDATORS = 50
 NUM_FULL_NODES = 25
@@ -96,7 +96,7 @@ def run_sweep(sweep_name: str, pqc_weights: Dict[str, float], output_path: str) 
     print(f"\n{'='*60}")
     print(f"Sensitivity Sweep: {sweep_name}")
     print(f"PQC weights: {pqc_weights}")
-    print(f"{len(pqc_fractions)} levels x {len(seeds)} seeds = {total_runs} runs")
+    print(f"{len(pqc_fractions)} levels × {len(seeds)} seeds = {total_runs} runs")
     print(f"{'='*60}\n")
 
     all_results = []
@@ -120,7 +120,7 @@ def run_sweep(sweep_name: str, pqc_weights: Dict[str, float], output_path: str) 
                 f"  [{run_idx:3d}/{total_runs}] pqc={pqc_frac:.2f} seed={seed:2d}  "
                 f"blocks={blocks:3d}  verify_ms={vt:8.2f}  stale={sr:.4f}  ({elapsed:.1f}s)"
             )
-        print(f"  -> PQC {pqc_frac:.0%} complete ({time.time() - t_level:.1f}s)\n")
+        print(f"  → PQC {pqc_frac:.0%} complete ({time.time() - t_level:.1f}s)\n")
 
     total_elapsed = time.time() - t_start
     print(f"Sweep '{sweep_name}' complete: {total_runs} runs in {total_elapsed:.1f}s\n")
@@ -152,7 +152,7 @@ def run_sweep(sweep_name: str, pqc_weights: Dict[str, float], output_path: str) 
             writer = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(all_results)
-        print(f"Saved {len(all_results)} rows -> {output_path}")
+        print(f"Saved {len(all_results)} rows → {output_path}")
 
     return all_results
 
