@@ -188,7 +188,7 @@ def _death_curve(agg: pd.DataFrame) -> go.Figure:
         hovertemplate="PQC: %{x}%<br>Max Stale: %{y:.1f}%<extra></extra>",
     ))
 
-    # Vertical threshold at ~85-90% (interpolated 30% stale crossing)
+    # Vertical threshold (interpolated 30% stale crossing)
     # Find crossing from the data
     _cross_x = None
     for i in range(len(agg) - 1):
@@ -302,7 +302,7 @@ def _false_bottleneck(agg: pd.DataFrame) -> go.Figure:
     fig.update_yaxes(
         title_text="Verification Time (ms)",
         secondary_y=True,
-        range=[0, 450],  # keep the 400 ms slot line visible; worst-case ~196 ms
+        range=[0, 450],  # keep the 400 ms slot line visible
     )
     return fig
 
@@ -552,27 +552,27 @@ def render(tab) -> None:
         st.subheader("1. The Death Curve — Phase Transition")
         st.plotly_chart(_death_curve(agg), use_container_width=True)
         st.info(
-            "**So what?** This is the critical chart. As PQC adoption increases, blocks get larger "
-            "and take longer to propagate. At ~89% PQC, stale rates exceed 30% — meaning nearly "
-            "one in three blocks is wasted. The shaded band shows variance across 10 Monte Carlo seeds.",
+            f"**So what?** This is the critical chart. As PQC adoption increases, blocks get larger "
+            f"and take longer to propagate. At {crit_value}, stale rates exceed 30% — meaning nearly "
+            f"one in three blocks is wasted. The shaded band shows variance across 10 Monte Carlo seeds.",
             icon="💡",
         )
 
         with st.expander("Methodology: Stale Rate Calculation"):
             st.markdown(
-                "A block is **stale** when its P90 propagation latency exceeds 90% of "
-                "the chain's block time (0.9 × 400 ms = 360 ms for Solana). The stale rate "
-                "is the fraction of blocks that go stale across 25 simulated blocks per run.\n\n"
-                "**Variance band:** The shaded region shows ± 1 standard deviation "
-                "across 10 independent random seeds at each PQC level. The dotted "
-                "lines show the absolute min / max across seeds.\n\n"
-                "**Key observation:** With corrected verification benchmarks (Cloudflare "
-                "2024) and realistic block fill, the stale rate rises **gradually** "
-                "from 0% at the baseline to ~34% at 100% PQC. The phase transition "
-                "occurs around **~85–90% PQC adoption**, where the mean stale rate "
-                "crosses 30% (one-in-three blocks orphaned). The primary driver is "
-                "block-size bloat (21× larger blocks) causing propagation delays that "
-                "exceed Solana's 400 ms slot budget."
+                f"A block is **stale** when its P90 propagation latency exceeds 90% of "
+                f"the chain's block time (0.9 × {block_time_ms:.0f} ms = {block_time_ms * 0.9:.0f} ms for Solana). The stale rate "
+                f"is the fraction of blocks that go stale across 25 simulated blocks per run.\n\n"
+                f"**Variance band:** The shaded region shows ± 1 standard deviation "
+                f"across 10 independent random seeds at each PQC level. The dotted "
+                f"lines show the absolute min / max across seeds.\n\n"
+                f"**Key observation:** With corrected verification benchmarks (Cloudflare "
+                f"2024) and realistic block fill, the stale rate rises from 0% at the "
+                f"baseline to ~{row_100['stale_mean']*100:.0f}% at 100% PQC. The phase transition "
+                f"occurs around **{crit_value}**, where the mean stale rate "
+                f"crosses 30% (one-in-three blocks orphaned). The primary driver is "
+                f"block-size bloat ({size_bloat:.0f}× larger blocks) causing propagation delays that "
+                f"exceed Solana's {block_time_ms:.0f} ms slot budget."
             )
 
         st.divider()
@@ -581,28 +581,28 @@ def render(tab) -> None:
         st.subheader("2. The False Bottleneck — Size vs Compute")
         st.plotly_chart(_false_bottleneck(agg), use_container_width=True)
         st.info(
-            "**So what?** This disproves a common assumption. Many expect PQC to fail because of slow "
+            f"**So what?** This disproves a common assumption. Many expect PQC to fail because of slow "
             f"verification. In reality, even at 100% PQC, verification takes only {verify_100_avg:.1f} ms (well within "
-            f"the {block_time_ms:.0f} ms slot). The real problem is block-size bloat — blocks grow 21× larger, "
-            "causing propagation delays.",
+            f"the {block_time_ms:.0f} ms slot). The real problem is block-size bloat — blocks grow {size_bloat:.0f}× larger, "
+            f"causing propagation delays.",
             icon="💡",
         )
 
         with st.expander("Methodology: Dual-Axis Interpretation"):
             st.markdown(
-                "**Left axis (orange bars):** Average block size in KB. PQC signatures "
-                "(ML-DSA-44: 2,420 B, ML-DSA-65: 3,309 B, SLH-DSA-128f: 17,088 B) "
-                "are 38–267× larger than Ed25519 (64 B), causing block-size inflation.\n\n"
-                "**Right axis (green line):** Average block verification time across "
+                f"**Left axis (orange bars):** Average block size in KB. PQC signatures "
+                f"(ML-DSA-44: 2,420 B, ML-DSA-65: 3,309 B, SLH-DSA-128f: 17,088 B) "
+                f"are 38–267× larger than Ed25519 (64 B), causing block-size inflation.\n\n"
+                f"**Right axis (green line):** Average block verification time across "
                 f"all Monte Carlo seeds. At 100% PQC, the mean verification time is "
                 f"~{verify_100_avg:.0f} ms — just **{verify_100_avg / block_time_ms * 100:.0f}% of the {block_time_ms:.0f} ms slot limit**. Even the worst single "
                 f"block from the worst seed (dotted line, ~{verify_100_worst:.0f} ms) stays below the "
-                "slot budget.\n\n"
-                "**Implication:** Verification time is a _false bottleneck_. The real "
-                "threat is block-size bloat (21× inflation) driving propagation delays. "
-                "Hardware acceleration for signature verification would **not** solve "
-                "the problem. Signature compression, aggregation, or application-layer "
-                "batching are required to address the real bottleneck."
+                f"slot budget.\n\n"
+                f"**Implication:** Verification time is a _false bottleneck_. The real "
+                f"threat is block-size bloat ({size_bloat:.0f}× inflation) driving propagation delays. "
+                f"Hardware acceleration for signature verification would **not** solve "
+                f"the problem. Signature compression, aggregation, or application-layer "
+                f"batching are required to address the real bottleneck."
             )
 
         st.divider()
@@ -624,21 +624,25 @@ def render(tab) -> None:
         )
 
         with st.expander("Methodology: Cross-Chain Estimation"):
+            _prop_p90_100 = row_100["prop_p90_mean"]
+            _prop_pct_sol = _prop_p90_100 / _CHAIN_BLOCK_TIMES["Solana"] * 100
+            _prop_pct_eth = _prop_p90_100 / _CHAIN_BLOCK_TIMES["Ethereum"] * 100
+            _prop_pct_btc = _prop_p90_100 / _CHAIN_BLOCK_TIMES["Bitcoin"] * 100
             st.markdown(
-                "### Two distinct failure modes\n\n"
-                "| Chain | Block Time | Failure Mode | Where Modelled |\n"
-                "|-------|-----------|--------------|----------------|\n"
-                "| **Solana** | 400 ms | Propagation collapse (stale blocks) | This tab (DES) |\n"
-                "| **Ethereum** | 12 s | Capacity collapse (throughput) | Block-Space Analysis |\n"
-                "| **Bitcoin** | 600 s | Capacity collapse (throughput) | Block-Space Analysis |\n\n"
-                "The DES sweep measures P90 propagation times peaking at ~341 ms at 100% PQC. "
-                "This is **85% of Solana's 400 ms slot** but only **2.8% of Ethereum's 12 s block** "
-                "and **0.06% of Bitcoin's 10-minute block**. Propagation is simply not the "
-                "binding constraint for slower chains.\n\n"
-                "For Bitcoin and Ethereum, the real threat from PQC is not stale blocks — it is "
-                "the 67–95% throughput reduction shown in the Block-Space Analysis tab, where "
-                "PQC signatures consume the block-weight budget (Bitcoin) or gas budget (Ethereum) "
-                "far faster than classical signatures."
+                f"### Two distinct failure modes\n\n"
+                f"| Chain | Block Time | Failure Mode | Where Modelled |\n"
+                f"|-------|-----------|--------------|----------------|\n"
+                f"| **Solana** | 400 ms | Propagation collapse (stale blocks) | This tab (DES) |\n"
+                f"| **Ethereum** | 12 s | Capacity collapse (throughput) | Block-Space Analysis |\n"
+                f"| **Bitcoin** | 600 s | Capacity collapse (throughput) | Block-Space Analysis |\n\n"
+                f"The DES sweep measures P90 propagation times peaking at ~{_prop_p90_100:.0f} ms at 100% PQC. "
+                f"This is **{_prop_pct_sol:.0f}% of Solana's 400 ms slot** but only **{_prop_pct_eth:.1f}% of Ethereum's 12 s block** "
+                f"and **{_prop_pct_btc:.2f}% of Bitcoin's 10-minute block**. Propagation is simply not the "
+                f"binding constraint for slower chains.\n\n"
+                f"For Bitcoin and Ethereum, the real threat from PQC is not stale blocks — it is "
+                f"the 67–95% throughput reduction shown in the Block-Space Analysis tab, where "
+                f"PQC signatures consume the block-weight budget (Bitcoin) or gas budget (Ethereum) "
+                f"far faster than classical signatures."
             )
 
         st.divider()
@@ -646,23 +650,27 @@ def render(tab) -> None:
         # ---- Bonus: Propagation P90 ----
         st.subheader("4. Propagation Latency Scaling")
         st.plotly_chart(_propagation_chart(agg), use_container_width=True)
+        _p90_at_100 = row_100["prop_p90_mean"]
+        _p90_pct_slot = _p90_at_100 / block_time_ms * 100
         st.info(
-            "**So what?** P90 means 90% of blocks propagate within this time. At 100% PQC, Solana's "
-            "P90 propagation reaches 341 ms — consuming 85% of the 400 ms slot budget. This leaves "
-            "almost no margin for network jitter or validator delays.",
+            f"**So what?** P90 means 90% of blocks propagate within this time. At 100% PQC, Solana's "
+            f"P90 propagation reaches {_p90_at_100:.0f} ms — consuming {_p90_pct_slot:.0f}% of the {block_time_ms:.0f} ms slot budget. This leaves "
+            f"almost no margin for network jitter or validator delays.",
             icon="💡",
         )
 
         with st.expander("Methodology: Propagation Model"):
+            _p90_baseline = baseline["prop_p90_mean"]
+            _p90_increase = _p90_at_100 / _p90_baseline if _p90_baseline > 0 else 0
             st.markdown(
-                "Propagation latency is modelled as a function of block size and "
-                "inter-node RTT (calibrated from AWS CloudPing February 2026 data). "
-                "The P90 value represents the 90th-percentile propagation time across "
-                "all validator-to-validator paths.\n\n"
-                "At 100% PQC, P90 increases 1.6× (215 ms → 341 ms), reaching **85% "
-                "of the 400 ms slot budget**. Combined with the 21× block-size inflation, "
-                "this propagation pressure is the primary driver of the stale-rate "
-                "phase transition observed at ~85–90% PQC adoption."
+                f"Propagation latency is modelled as a function of block size and "
+                f"inter-node RTT (calibrated from AWS CloudPing February 2026 data). "
+                f"The P90 value represents the 90th-percentile propagation time across "
+                f"all validator-to-validator paths.\n\n"
+                f"At 100% PQC, P90 increases {_p90_increase:.1f}× ({_p90_baseline:.0f} ms → {_p90_at_100:.0f} ms), reaching **{_p90_pct_slot:.0f}% "
+                f"of the {block_time_ms:.0f} ms slot budget**. Combined with the {size_bloat:.0f}× block-size inflation, "
+                f"this propagation pressure is the primary driver of the stale-rate "
+                f"phase transition observed at {crit_value}."
             )
 
         # ---- Raw data explorer ----
