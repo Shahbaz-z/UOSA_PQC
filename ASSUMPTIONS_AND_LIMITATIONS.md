@@ -110,10 +110,14 @@ The 215 ms P90 baseline is consistent with Decker and Wattenhofer's empirical pr
 ## 5. Cross-Chain Extrapolation
 
 ### 5.1 Solana-Only DES Simulation
-The Monte Carlo DES simulation (sweep CSV, sensitivity CSVs) was only run for a Solana-like chain. Bitcoin and Ethereum estimates in the PQC Shock Simulator tab are first-order analytical extrapolations, not separate DES simulations. They scale the Solana results by relative block time, block size, and propagation differences.
+The Monte Carlo DES simulation (sweep CSV, sensitivity CSVs) was only run for a Solana-like chain. This is a deliberate design choice, not an omission.
+
+**Rationale:** The DES engine targets **propagation latency** as the failure mode — the risk that PQC-inflated blocks cannot propagate within a chain's slot/block time, producing stale blocks. Solana's 400 ms slot is the only major chain where this failure mode is physically plausible: the measured P90 propagation at 100% PQC (~341 ms) consumes 85% of the slot budget. By contrast, the same 341 ms is only 2.8% of Ethereum's 12 s block time and 0.06% of Bitcoin's 10-minute block time — propagation is not a binding constraint.
+
+Bitcoin and Ethereum face a **different failure mode**: capacity-bounded throughput collapse, where PQC signatures consume the block-weight budget (Bitcoin SegWit) or gas budget (Ethereum EVM) far faster than classical signatures. This is modelled exactly in the static Block-Space Analysis (Phase 1), which uses each chain's native cost model (SegWit weight units for Bitcoin, gas accounting for Ethereum). A DES simulation would add no additional insight for these chains because their block times provide orders-of-magnitude propagation headroom.
 
 ### 5.2 "Cross-Chain" Title
-The project title "PQC Cross-Chain Simulator" is somewhat misleading: the DES simulation is single-chain (Solana-parametrised). The "cross-chain" aspect comes from the static block-space analysis (which is exact per chain) and the analytical extrapolation (which is approximate). A more precise title would be "PQC Blockchain Impact Simulator with Cross-Chain Block-Space Analysis."
+The project title "PQC Cross-Chain Simulator" reflects the full scope of the tool: the DES simulation (Solana propagation analysis), the static block-space analysis (exact per-chain capacity impact for all three chains), and the verification timing model. The "cross-chain" aspect is the comparative analysis across chains, not a claim that all three chains were DES-simulated.
 
 ---
 

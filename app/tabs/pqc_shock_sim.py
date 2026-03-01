@@ -1,11 +1,11 @@
-"""Tab 4: PQC Shock Simulator \u2014 Phase 2/3 Monte Carlo results dashboard.
+"""Tab 4: PQC Shock Simulator — Phase 2/3 Monte Carlo results dashboard.
 
-Reads ``results/pqc_sweep.csv`` (210 rows \u00d7 30 columns) produced by the
+Reads ``results/pqc_sweep.csv`` (210 rows × 30 columns) produced by the
 Phase 2/3 parameter sweep and renders three interactive Plotly charts:
 
-1. **The Death Curve** \u2014 stale-rate phase transition with seed variance band
-2. **The False Bottleneck** \u2014 dual-axis block-size vs verification time
-3. **Cross-Chain Resilience** \u2014 estimated stale rates for Solana / Ethereum / Bitcoin
+1. **The Death Curve** — stale-rate phase transition with seed variance band
+2. **The False Bottleneck** — dual-axis block-size vs verification time
+3. **Cross-Chain Resilience** — estimated stale rates for Solana / Ethereum / Bitcoin
 
 All heavy data loading is cached via ``st.cache_data`` so Streamlit
 re-renders are instantaneous.
@@ -26,7 +26,7 @@ from plotly.subplots import make_subplots
 # ---------------------------------------------------------------------------
 _CSV_PATH = Path(__file__).resolve().parent.parent.parent / "results" / "pqc_sweep.csv"
 
-# Chain block-time budgets (ms) \u2014 propagation must stay below this
+# Chain block-time budgets (ms) — propagation must stay below this
 _CHAIN_BLOCK_TIMES: dict[str, float] = {
     "Solana": 400,
     "Ethereum": 12_000,
@@ -47,7 +47,7 @@ _CLR_BITCOIN = "#F7931A"      # Bitcoin brand orange
 # ---------------------------------------------------------------------------
 # Data loading (cached)
 # ---------------------------------------------------------------------------
-@st.cache_data(show_spinner="Loading sweep results \u2026")
+@st.cache_data(show_spinner="Loading sweep results …")
 def _load_sweep() -> pd.DataFrame:
     """Load and validate the Monte Carlo sweep CSV."""
     if not _CSV_PATH.exists():
@@ -64,9 +64,9 @@ def _load_sweep() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(show_spinner="Aggregating across seeds \u2026")
+@st.cache_data(show_spinner="Aggregating across seeds …")
 def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute per-PQC-fraction mean \u00b1 std across Monte Carlo seeds."""
+    """Compute per-PQC-fraction mean ± std across Monte Carlo seeds."""
     agg = (
         df.groupby("pqc_pct")
         .agg(
@@ -95,7 +95,7 @@ def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Cross-chain stale-rate estimation
 # ---------------------------------------------------------------------------
-@st.cache_data(show_spinner="Computing cross-chain estimates \u2026")
+@st.cache_data(show_spinner="Computing cross-chain estimates …")
 def _estimate_cross_chain(df: pd.DataFrame) -> pd.DataFrame:
     """Estimate stale rates for Ethereum & Bitcoin from Solana propagation data.
 
@@ -124,14 +124,14 @@ def _estimate_cross_chain(df: pd.DataFrame) -> pd.DataFrame:
         # Solana: use empirical stale rate
         rows.append({"pqc_pct": pqc, "chain": "Solana", "stale_rate": r["stale"]})
 
-        # Ethereum: 12 s blocks \u2014 same propagation physics but 30\u00d7 more time budget.
-        # Stale probability \u2248 P(propagation > block_time).  With 12 s blocks,
+        # Ethereum: 12 s blocks — same propagation physics but 30× more time budget.
+        # Stale probability ≈ P(propagation > block_time).  With 12 s blocks,
         # the propagation times we see (200-310 ms) are <3% of the budget,
         # so stale rate is effectively 0 until extreme PQC levels.
         eth_stale = max(0, (r["prop_p90"] - _CHAIN_BLOCK_TIMES["Ethereum"]) / _CHAIN_BLOCK_TIMES["Ethereum"])
         rows.append({"pqc_pct": pqc, "chain": "Ethereum", "stale_rate": min(1, eth_stale)})
 
-        # Bitcoin: 600 s blocks \u2014 propagation is <0.1% of budget
+        # Bitcoin: 600 s blocks — propagation is <0.1% of budget
         btc_stale = max(0, (r["prop_p90"] - _CHAIN_BLOCK_TIMES["Bitcoin"]) / _CHAIN_BLOCK_TIMES["Bitcoin"])
         rows.append({"pqc_pct": pqc, "chain": "Bitcoin", "stale_rate": min(1, btc_stale)})
 
@@ -159,7 +159,7 @@ def _death_curve(agg: pd.DataFrame) -> go.Figure:
         line=dict(color="rgba(255,255,255,0)"),
         hoverinfo="skip",
         showlegend=True,
-        name="\u00b1 1\u03c3 across 10 seeds",
+        name="± 1σ across 10 seeds",
     ))
 
     # Main line
@@ -202,7 +202,7 @@ def _death_curve(agg: pd.DataFrame) -> go.Figure:
     if _cross_x is not None:
         fig.add_vline(
             x=_cross_x, line_dash="dash", line_color=_CLR_THRESHOLD, line_width=2,
-            annotation_text=f"Critical Threshold (~{_cross_x:.0f}% PQC \u2192 30% Stale)",
+            annotation_text=f"Critical Threshold (~{_cross_x:.0f}% PQC → 30% Stale)",
             annotation_position="top left",
             annotation_font=dict(size=11, color=_CLR_THRESHOLD),
         )
@@ -367,7 +367,7 @@ def _propagation_chart(agg: pd.DataFrame) -> go.Figure:
         line=dict(color="rgba(255,255,255,0)"),
         hoverinfo="skip",
         showlegend=True,
-        name="\u00b1 1\u03c3",
+        name="± 1σ",
     ))
 
     fig.add_trace(go.Scatter(
@@ -407,7 +407,7 @@ def render(tab) -> None:
     with tab:
         st.header("PQC Shock Simulator")
         st.caption(
-            "Phase 2/3 Monte Carlo results: 21 PQC levels \u00d7 10 random seeds = 210 "
+            "Phase 2/3 Monte Carlo results: 21 PQC levels × 10 random seeds = 210 "
             "discrete-event simulations with Poisson arrivals, bounded mempool, and "
             "heterogeneous signature verification."
         )
@@ -428,7 +428,7 @@ def render(tab) -> None:
 
         # ------------------------------------------------------------------
         # Critical Threshold: find PQC level where stale rate first exceeds
-        # 30%.  At 30% stale, nearly one-in-three blocks are orphaned \u2014 a
+        # 30%.  At 30% stale, nearly one-in-three blocks are orphaned — a
         # level widely considered operationally critical for any chain.
         # We use linear interpolation between the two bracketing data points
         # for a precise crossing estimate.
@@ -465,7 +465,7 @@ def render(tab) -> None:
             size_0_kb = baseline["size_mean"]
             size_ratio = size_20_kb / size_0_kb if size_0_kb > 0 else 0
             size_value = f"{size_20_kb:.0f} KB"
-            size_delta = f"{size_ratio:.0f}\u00d7 baseline ({size_0_kb:.0f} KB)"
+            size_delta = f"{size_ratio:.0f}× baseline ({size_0_kb:.0f} KB)"
         else:
             size_value = "N/A"
             size_delta = "No 20% data"
@@ -473,9 +473,9 @@ def render(tab) -> None:
         # ------------------------------------------------------------------
         # Verification Time at 100% PQC
         # Use the *average* verification time (avg_verification_time_ms)
-        # across all blocks and seeds \u2014 this is the representative metric.
+        # across all blocks and seeds — this is the representative metric.
         # The previous code used max-of-max (196 ms), which is the single
-        # worst block from the single worst seed \u2014 a double-maximum that
+        # worst block from the single worst seed — a double-maximum that
         # over-states typical verification load.
         # ------------------------------------------------------------------
         # Compute mean of avg_verification_time_ms at 100% PQC from raw data
@@ -485,7 +485,7 @@ def render(tab) -> None:
         verify_100_worst = row_100["verif_max"]  # max-of-max, kept for context
         verify_ratio = block_time_ms / verify_100_avg if verify_100_avg > 0 else float("inf")
         verify_value = f"{verify_100_avg:.1f} ms"
-        verify_delta = f"{verify_ratio:.0f}\u00d7 below {block_time_ms:.0f} ms slot (worst: {verify_100_worst:.0f} ms)"
+        verify_delta = f"{verify_ratio:.0f}× below {block_time_ms:.0f} ms slot (worst: {verify_100_worst:.0f} ms)"
 
         # ------------------------------------------------------------------
         # Root Cause: compare what fraction of the slot budget each factor
@@ -501,7 +501,7 @@ def render(tab) -> None:
 
         if prop_pct_of_slot > verify_pct_of_slot:
             root_value = "Bandwidth (Data Bloat)"
-            root_delta = f"{size_bloat:.0f}\u00d7 block inflation \u2192 NOT Compute"
+            root_delta = f"{size_bloat:.0f}× block inflation → NOT Compute"
         else:
             root_value = "Compute"
             root_delta = "NOT Bandwidth"
@@ -532,7 +532,7 @@ def render(tab) -> None:
                 delta=verify_delta,
                 delta_color="normal",
                 help="Mean block-verification time at 100% PQC (averaged across "
-                     "all 25 blocks \u00d7 10 seeds). Even the worst single block "
+                     "all 25 blocks × 10 seeds). Even the worst single block "
                      f"({verify_100_worst:.0f} ms) remains well below Solana's "
                      f"{block_time_ms:.0f} ms slot budget.",
             )
@@ -549,57 +549,57 @@ def render(tab) -> None:
         st.divider()
 
         # ---- Chart 1: The Death Curve ----
-        st.subheader("1. The Death Curve \u2014 Phase Transition")
+        st.subheader("1. The Death Curve — Phase Transition")
         st.plotly_chart(_death_curve(agg), use_container_width=True)
         st.info(
             "**So what?** This is the critical chart. As PQC adoption increases, blocks get larger "
-            "and take longer to propagate. At ~89% PQC, stale rates exceed 30% \u2014 meaning nearly "
+            "and take longer to propagate. At ~89% PQC, stale rates exceed 30% — meaning nearly "
             "one in three blocks is wasted. The shaded band shows variance across 10 Monte Carlo seeds.",
-            icon="\U0001f4a1",
+            icon="💡",
         )
 
         with st.expander("Methodology: Stale Rate Calculation"):
             st.markdown(
                 "A block is **stale** when its P90 propagation latency exceeds 90% of "
-                "the chain's block time (0.9 \u00d7 400 ms = 360 ms for Solana). The stale rate "
+                "the chain's block time (0.9 × 400 ms = 360 ms for Solana). The stale rate "
                 "is the fraction of blocks that go stale across 25 simulated blocks per run.\n\n"
-                "**Variance band:** The shaded region shows \u00b1 1 standard deviation "
+                "**Variance band:** The shaded region shows ± 1 standard deviation "
                 "across 10 independent random seeds at each PQC level. The dotted "
                 "lines show the absolute min / max across seeds.\n\n"
                 "**Key observation:** With corrected verification benchmarks (Cloudflare "
                 "2024) and realistic block fill, the stale rate rises **gradually** "
                 "from 0% at the baseline to ~34% at 100% PQC. The phase transition "
-                "occurs around **~85\u201390% PQC adoption**, where the mean stale rate "
+                "occurs around **~85–90% PQC adoption**, where the mean stale rate "
                 "crosses 30% (one-in-three blocks orphaned). The primary driver is "
-                "block-size bloat (21\u00d7 larger blocks) causing propagation delays that "
+                "block-size bloat (21× larger blocks) causing propagation delays that "
                 "exceed Solana's 400 ms slot budget."
             )
 
         st.divider()
 
         # ---- Chart 2: The False Bottleneck ----
-        st.subheader("2. The False Bottleneck \u2014 Size vs Compute")
+        st.subheader("2. The False Bottleneck — Size vs Compute")
         st.plotly_chart(_false_bottleneck(agg), use_container_width=True)
         st.info(
             "**So what?** This disproves a common assumption. Many expect PQC to fail because of slow "
             f"verification. In reality, even at 100% PQC, verification takes only {verify_100_avg:.1f} ms (well within "
-            f"the {block_time_ms:.0f} ms slot). The real problem is block-size bloat \u2014 blocks grow 21\u00d7 larger, "
+            f"the {block_time_ms:.0f} ms slot). The real problem is block-size bloat — blocks grow 21× larger, "
             "causing propagation delays.",
-            icon="\U0001f4a1",
+            icon="💡",
         )
 
         with st.expander("Methodology: Dual-Axis Interpretation"):
             st.markdown(
                 "**Left axis (orange bars):** Average block size in KB. PQC signatures "
                 "(ML-DSA-44: 2,420 B, ML-DSA-65: 3,309 B, SLH-DSA-128f: 17,088 B) "
-                "are 38\u2013267\u00d7 larger than Ed25519 (64 B), causing block-size inflation.\n\n"
+                "are 38–267× larger than Ed25519 (64 B), causing block-size inflation.\n\n"
                 "**Right axis (green line):** Average block verification time across "
                 f"all Monte Carlo seeds. At 100% PQC, the mean verification time is "
-                f"~{verify_100_avg:.0f} ms \u2014 just **{verify_100_avg / block_time_ms * 100:.0f}% of the {block_time_ms:.0f} ms slot limit**. Even the worst single "
+                f"~{verify_100_avg:.0f} ms — just **{verify_100_avg / block_time_ms * 100:.0f}% of the {block_time_ms:.0f} ms slot limit**. Even the worst single "
                 f"block from the worst seed (dotted line, ~{verify_100_worst:.0f} ms) stays below the "
                 "slot budget.\n\n"
                 "**Implication:** Verification time is a _false bottleneck_. The real "
-                "threat is block-size bloat (21\u00d7 inflation) driving propagation delays. "
+                "threat is block-size bloat (21× inflation) driving propagation delays. "
                 "Hardware acceleration for signature verification would **not** solve "
                 "the problem. Signature compression, aggregation, or application-layer "
                 "batching are required to address the real bottleneck."
@@ -610,24 +610,35 @@ def render(tab) -> None:
         # ---- Chart 3: Cross-Chain Resilience ----
         st.subheader("3. Cross-Chain Resilience")
         st.plotly_chart(_cross_chain_resilience(cc), use_container_width=True)
-        st.info(
-            "**So what?** Not all chains are equally vulnerable. Bitcoin's 10-minute blocks and "
-            "Ethereum's 12-second blocks provide much more propagation budget than Solana's 400 ms slots. "
-            "Solana fails first because it has the tightest timing constraints.",
-            icon="\U0001f4a1",
+        st.warning(
+            "**Why are Bitcoin and Ethereum flatlining at 0%?**  "
+            "This discrete-event simulation specifically targets **propagation latency** "
+            "as the failure mode. Because Bitcoin (600 s) and Ethereum (12 s) possess "
+            "massive block-time buffers compared to Solana (400 ms), PQC signature bloat "
+            "does not trigger consensus failure via stale blocks on those chains.  \n\n"
+            "Their failure mode is **strictly capacity-bounded** (throughput collapse), "
+            "which is modelled in the **Block-Space Analysis** tab — not the DES engine. "
+            "Solana is the only chain where PQC adoption creates a propagation-induced "
+            "phase transition.",
+            icon="⚠️",
         )
 
         with st.expander("Methodology: Cross-Chain Estimation"):
             st.markdown(
-                "Bitcoin (10-minute blocks) and Ethereum (12-second blocks) are estimated "
-                "using the same propagation-latency profile measured in the Solana sweep.\n\n"
-                "Since measured P90 propagation times peak at ~341 ms (at 100% PQC), "
-                "which is **far below** Ethereum's 12,000 ms and Bitcoin's 600,000 ms "
-                "block times, both chains show **zero stale blocks** at all PQC levels.\n\n"
-                "**Key insight:** Slow block times provide enormous propagation headroom. "
-                "Solana's 400 ms slots make it uniquely vulnerable to PQC signature bloat, "
-                "while Bitcoin and Ethereum can absorb the transition with negligible impact "
-                "on block propagation."
+                "### Two distinct failure modes\n\n"
+                "| Chain | Block Time | Failure Mode | Where Modelled |\n"
+                "|-------|-----------|--------------|----------------|\n"
+                "| **Solana** | 400 ms | Propagation collapse (stale blocks) | This tab (DES) |\n"
+                "| **Ethereum** | 12 s | Capacity collapse (throughput) | Block-Space Analysis |\n"
+                "| **Bitcoin** | 600 s | Capacity collapse (throughput) | Block-Space Analysis |\n\n"
+                "The DES sweep measures P90 propagation times peaking at ~341 ms at 100% PQC. "
+                "This is **85% of Solana's 400 ms slot** but only **2.8% of Ethereum's 12 s block** "
+                "and **0.06% of Bitcoin's 10-minute block**. Propagation is simply not the "
+                "binding constraint for slower chains.\n\n"
+                "For Bitcoin and Ethereum, the real threat from PQC is not stale blocks — it is "
+                "the 67–95% throughput reduction shown in the Block-Space Analysis tab, where "
+                "PQC signatures consume the block-weight budget (Bitcoin) or gas budget (Ethereum) "
+                "far faster than classical signatures."
             )
 
         st.divider()
@@ -637,9 +648,9 @@ def render(tab) -> None:
         st.plotly_chart(_propagation_chart(agg), use_container_width=True)
         st.info(
             "**So what?** P90 means 90% of blocks propagate within this time. At 100% PQC, Solana's "
-            "P90 propagation reaches 341 ms \u2014 consuming 85% of the 400 ms slot budget. This leaves "
+            "P90 propagation reaches 341 ms — consuming 85% of the 400 ms slot budget. This leaves "
             "almost no margin for network jitter or validator delays.",
-            icon="\U0001f4a1",
+            icon="💡",
         )
 
         with st.expander("Methodology: Propagation Model"):
@@ -648,10 +659,10 @@ def render(tab) -> None:
                 "inter-node RTT (calibrated from AWS CloudPing February 2026 data). "
                 "The P90 value represents the 90th-percentile propagation time across "
                 "all validator-to-validator paths.\n\n"
-                "At 100% PQC, P90 increases 1.6\u00d7 (215 ms \u2192 341 ms), reaching **85% "
-                "of the 400 ms slot budget**. Combined with the 21\u00d7 block-size inflation, "
+                "At 100% PQC, P90 increases 1.6× (215 ms → 341 ms), reaching **85% "
+                "of the 400 ms slot budget**. Combined with the 21× block-size inflation, "
                 "this propagation pressure is the primary driver of the stale-rate "
-                "phase transition observed at ~85\u201390% PQC adoption."
+                "phase transition observed at ~85–90% PQC adoption."
             )
 
         # ---- Raw data explorer ----
