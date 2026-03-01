@@ -63,7 +63,8 @@ class VerificationResult:
 #   https://blog.cloudflare.com/another-look-at-pq-signatures/
 #   SLH-DSA-128f verify ≈ 110× ML-DSA-44 baseline → 110 × 54 ≈ 5,940 µs
 #   SLH-DSA-128s verify ≈ 40× ML-DSA-44 (with 14,000× sign) → ~2,160 µs
-#   SLH-DSA-256f ≈ 2× SLH-128f → ~11,880 µs
+#   SLH-DSA-192f ≈ 1.5× SLH-128f (50% more hash-tree nodes) → 1.5 × 5,940 ≈ 8,910 µs
+#   SLH-DSA-256f ≈ 2.5× SLH-128f (largest parameter set) → 2.5 × 5,940 ≈ 14,850 µs
 #   SLH-DSA-256s ≈ 4× SLH-128s → ~8,640 µs
 #
 # Classical baselines:
@@ -99,9 +100,9 @@ VERIFICATION_PROFILES: Dict[str, VerificationProfile] = {
     "SLH-DSA-128s": VerificationProfile("SLH-DSA-128s", 2160.0, 1.0, True),
     "SLH-DSA-128f": VerificationProfile("SLH-DSA-128f", 5940.0, 1.0, True),
     "SLH-DSA-192s": VerificationProfile("SLH-DSA-192s", 5500.0, 1.0, True),
-    "SLH-DSA-192f": VerificationProfile("SLH-DSA-192f", 11880.0, 1.0, True),
+    "SLH-DSA-192f": VerificationProfile("SLH-DSA-192f", 8910.0, 1.0, True),   # 1.5× SLH-DSA-128f (5,940 µs)
     "SLH-DSA-256s": VerificationProfile("SLH-DSA-256s", 8640.0, 1.0, True),
-    "SLH-DSA-256f": VerificationProfile("SLH-DSA-256f", 11880.0, 1.0, True),
+    "SLH-DSA-256f": VerificationProfile("SLH-DSA-256f", 14850.0, 1.0, True),  # 2.5× SLH-DSA-128f (5,940 µs)
 
     # Falcon (pending FN-DSA) -- fast verification is a key advantage
     "Falcon-512": VerificationProfile("Falcon-512", 100.0, 1.0, True),

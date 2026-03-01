@@ -1,36 +1,18 @@
-"""Node class with SimPy Resource-based bandwidth and CPU contention.
+"""Node class with analytical CPU-scheduling and bandwidth modelling.
 
-CRITICAL DESIGN DECISIONS (per Quant Lead review):
+CPU CONTENTION is modelled analytically via a min-heap of per-core
+free-times (_core_free_at).  schedule_verification() assigns each
+verification job to the earliest-free core without requiring SimPy.
 
-1. BANDWIDTH CONTENTION:
-   - Upload and download bandwidth are modeled as SimPy Containers.
-   - Container level represents available bandwidth (Mbps).
-   - Transmissions consume bandwidth for their duration.
-   - This creates realistic queuing when a node gossips to multiple peers.
-
-   Example: A 100 Mbps upload node sending 8MB to 8 peers simultaneously:
-   - Each transmission requests bandwidth from the Container.
-   - Transmissions queue if insufficient bandwidth is available.
-   - NIC saturation is accurately modeled.
-
-2. CPU CONTENTION:
-   - CPU cores are modeled as a SimPy Resource with capacity=num_cores.
-   - Verification operations must acquire a CPU core.
-   - Heavy PQC signatures (SLH-DSA) physically block other verifications.
-   - This models real node behavior under computational load.
-
-3. TRANSMISSION MODEL:
-   - Time = size_bytes * 8 / bandwidth_bps
-   - Uses min(sender_upload, receiver_download) as effective rate.
-   - Bandwidth is consumed for the duration of transmission.
+TRANSMISSION TIME is computed from block size and effective bandwidth
+(min of sender upload, receiver download) — no SimPy Container needed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Generator, List
+from typing import TYPE_CHECKING, Optional, List
 import heapq
-import simpy
 
 if TYPE_CHECKING:
     from simulator.network.propagation import Block
@@ -88,43 +70,26 @@ class NodeState:
 class Node:
     """A network node with bandwidth and CPU constraints.
 
-    Uses SimPy resources to model physical contention:
-    - upload_bandwidth: Container (Mbps available)
-    - download_bandwidth: Container (Mbps available)
-    - cpu_cores: Resource (concurrent verification slots)
-
-    This ensures realistic queuing behavior when:
-    - Gossipping to multiple peers saturates NIC
-    - Verifying multiple blocks saturates CPU
+    CPU queuing is modelled analytically via _core_free_at (min-heap).
+    Bandwidth is used only to compute transmission time; no SimPy
+    containers are required.
     """
 
-    def __init__(self, config: NodeConfig, env: simpy.Environment):
-        """Initialize node with SimPy resources.
+    def __init__(self, config: NodeConfig, env):
+        """Initialize node.
 
         Args:
             config: Static node configuration.
-            env: SimPy environment for resource creation.
+            env: Simulation environment (kept for API compatibility).
         """
         self.config = config
         self.env = env
         self.state = NodeState(node_id=config.node_id)
 
-        # Bandwidth as Containers (level = available Mbps)
-        # Using Container allows partial consumption for parallel transmissions
-        self._upload_bw = simpy.Container(
-            env, capacity=config.upload_bandwidth_mbps, init=config.upload_bandwidth_mbps
-        )
-        self._download_bw = simpy.Container(
-            env, capacity=config.download_bandwidth_mbps, init=config.download_bandwidth_mbps
-        )
-
-        # CPU cores as Resource (capacity = num cores)
-        self._cpu = simpy.Resource(env, capacity=config.cpu_cores)
-
         # ---- Analytical CPU scheduling queue ----
         # Tracks when each core becomes free (min-heap of timestamps).
-        # This models the same queuing physics as SimPy Resource without
-        # requiring env.run(), so it integrates with the custom event loop.
+        # Models the same queuing physics as a SimPy Resource without
+        # requiring env.run(), integrating with the custom event loop.
         self._core_free_at: List[float] = [0.0] * config.cpu_cores
         heapq.heapify(self._core_free_at)
 
@@ -213,85 +178,6 @@ class Node:
 
         return completion_time
 
-    def send_block(
-        self,
-        block: "Block",
-        receiver: "Node",
-    ) -> Generator[simpy.Event, None, float]:
-        """SimPy process: Send a block to another node.
-
-        This is a BLOCKING operation that:
-        1. Computes effective bandwidth (min of sender upload, receiver download)
-        2. Computes transmission time based on block size
-        3. Yields for the transmission duration
-
-        The caller must handle geographic latency separately.
-
-        Yields:
-            SimPy events for bandwidth consumption.
-
-        Returns:
-            Actual transmission time in ms.
-        """
-        size_bytes = block.size_bytes
-
-        # Effective bandwidth is bottleneck of sender upload and receiver download
-        effective_bw_mbps = min(
-            self.config.upload_bandwidth_mbps,
-            receiver.config.download_bandwidth_mbps,
-        )
-
-        # Calculate transmission time
-        tx_time_ms = self.transmission_time_ms(size_bytes, effective_bw_mbps)
-
-        # Consume bandwidth for duration (simplified: just yield timeout)
-        # In a more detailed model, we'd use Container.get() and Container.put()
-        yield self.env.timeout(tx_time_ms)
-
-        # Update statistics
-        self.state.bytes_uploaded += size_bytes
-        receiver.state.bytes_downloaded += size_bytes
-
-        return tx_time_ms
-
-    def verify_block(
-        self,
-        block: "Block",
-    ) -> Generator[simpy.Event, None, float]:
-        """SimPy process: Verify all signatures in a block.
-
-        This is a BLOCKING operation that:
-        1. Requests a CPU core from the resource pool
-        2. Computes verification time based on algorithm and signature count
-        3. Holds the CPU core for the verification duration
-        4. Releases the CPU core
-
-        If all CPU cores are busy, this will queue until one is available.
-
-        Yields:
-            SimPy events for CPU resource acquisition and verification.
-
-        Returns:
-            Actual verification time in ms.
-        """
-        verify_time_ms = self.verification_time_ms(
-            block.signature_algorithm,
-            block.total_signatures,
-        )
-
-        # Request a CPU core (blocks if all cores busy)
-        with self._cpu.request() as req:
-            yield req  # Wait for CPU core
-
-            # Perform verification (blocks the core)
-            yield self.env.timeout(verify_time_ms)
-
-        # Update statistics
-        self.state.blocks_validated += 1
-        self.state.total_verification_time_ms += verify_time_ms
-
-        return verify_time_ms
-
     def has_seen_block(self, block_hash: str) -> bool:
         """Check if this node has already seen a block."""
         return block_hash in self.state.known_blocks
@@ -302,20 +188,3 @@ class Node:
             self.state.known_blocks[block_hash] = time_ms
         self.state.last_activity_time_ms = time_ms
 
-    def utilization_stats(self) -> dict:
-        """Get resource utilization statistics.
-
-        Returns:
-            Dict with upload_util, download_util, cpu_util percentages.
-        """
-        # CPU utilization: fraction of cores in use
-        cpu_util = self._cpu.count / self._cpu.capacity if self._cpu.capacity > 0 else 0
-
-        return {
-            "cpu_in_use": self._cpu.count,
-            "cpu_capacity": self._cpu.capacity,
-            "cpu_utilization": cpu_util,
-            "bytes_uploaded": self.state.bytes_uploaded,
-            "bytes_downloaded": self.state.bytes_downloaded,
-            "blocks_validated": self.state.blocks_validated,
-        }

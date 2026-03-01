@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import itertools
 import os
 import sys
 import time

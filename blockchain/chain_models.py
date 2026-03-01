@@ -223,12 +223,14 @@ def analyze_solana_block_space(
 
     sig_size = SIGNATURE_SIZES[signature_type] * num_signers
     pk_size = PUBLIC_KEY_SIZES[signature_type] * num_signers
-    tx_size = base_tx_overhead + sig_size
+    tx_size = base_tx_overhead + sig_size + pk_size
     txs_per_block = available_block_space // tx_size
     tps = txs_per_block / (slot_time_ms / 1000)
 
     # Baseline: Ed25519 (with same vote overhead)
-    ed_tx_size = base_tx_overhead + SIGNATURE_SIZES["Ed25519"] * num_signers
+    ed_sig = SIGNATURE_SIZES["Ed25519"] * num_signers
+    ed_pk = PUBLIC_KEY_SIZES["Ed25519"] * num_signers
+    ed_tx_size = base_tx_overhead + ed_sig + ed_pk
     ed_txs = available_block_space // ed_tx_size
 
     return BlockAnalysis(

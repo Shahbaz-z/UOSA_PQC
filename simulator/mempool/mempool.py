@@ -10,7 +10,6 @@ crowd out cheaper classical transactions — or pay more to survive.
 
 from __future__ import annotations
 
-import heapq
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -31,8 +30,8 @@ class MempoolStats:
 class GlobalMempool:
     """Bounded mempool with lowest-fee-rate eviction.
 
-    Transactions are stored in a dict for O(1) lookup and a min-heap
-    ordered by fee_rate for O(log n) eviction.
+    Transactions are stored in a dict for O(1) lookup;
+    eviction scans for the lowest fee_rate transaction (O(n)).
 
     Capacity is enforced in bytes, matching real-world mempool limits.
 
