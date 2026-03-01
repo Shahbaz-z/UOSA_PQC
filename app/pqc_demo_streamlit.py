@@ -255,7 +255,30 @@ with col_tldr1:
     st.metric("The Problem", "10-700×", help="PQC signatures are 10-700× larger than classical ones")
     st.caption("PQC signatures are 10-700× larger than classical, directly reducing blockchain throughput")
 with col_tldr2:
-    st.metric("The Finding", "~89% PQC → Failure", help="At ~89% PQC adoption, Solana's stale rate exceeds 30%")
+    # Dynamic critical threshold from sweep data (no hardcoded values)
+    _sweep_csv = Path(__file__).resolve().parent.parent / "results" / "pqc_sweep.csv"
+    _finding_label = "~??% PQC → Failure"
+    _finding_help = "PQC adoption level at which Solana's stale rate exceeds 30%"
+    if _sweep_csv.exists():
+        try:
+            import pandas as _pd
+            _sweep_df = _pd.read_csv(_sweep_csv)
+            _sweep_df["pqc_pct"] = (_sweep_df["pqc_fraction"] * 100).round(1)
+            _sweep_agg = _sweep_df.groupby("pqc_pct")["stale_rate"].mean().reset_index()
+            _sweep_agg = _sweep_agg.sort_values("pqc_pct")
+            for _i in range(len(_sweep_agg) - 1):
+                _y1 = _sweep_agg.iloc[_i]["stale_rate"]
+                _y2 = _sweep_agg.iloc[_i + 1]["stale_rate"]
+                if _y1 < 0.30 <= _y2:
+                    _x1 = _sweep_agg.iloc[_i]["pqc_pct"]
+                    _x2 = _sweep_agg.iloc[_i + 1]["pqc_pct"]
+                    _crossing = _x1 + (0.30 - _y1) * (_x2 - _x1) / (_y2 - _y1)
+                    _finding_label = f"~{_crossing:.0f}% PQC → Failure"
+                    _finding_help = f"At ~{_crossing:.0f}% PQC adoption, Solana's stale rate exceeds 30%"
+                    break
+        except Exception:
+            pass
+    st.metric("The Finding", _finding_label, help=_finding_help)
     st.caption("Block-size bloat (not computation) is the bottleneck — propagation delay causes stale blocks")
 with col_tldr3:
     st.metric("The Solution", "Falcon-512", help="Smallest PQC signature retains most throughput")
