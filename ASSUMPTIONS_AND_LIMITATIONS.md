@@ -16,12 +16,12 @@ This document catalogues every assumption, simplification, and known limitation 
 
 **Impact:** This underestimates real-world propagation delays, making the simulator's conclusions more conservative (actual network degradation under PQC would be worse than modelled).
 
-**Note:** The `Node` class originally included SimPy Container resources for bandwidth queuing (`_upload_bw`, `_download_bw`) and SimPy Resource for CPU contention (`_cpu`), along with generator methods (`send_block()`, `verify_block()`) designed for process-based simulation. These were removed during the code cleanup as they were never invoked by the event-loop engine. The infrastructure exists for potential future extension to a full process-based model.
+**Note:** The `Node` class originally included SimPy Container resources for bandwidth queuing (`_upload_bw`, `_download_bw`) and SimPy Resource for CPU contention (`_cpu`), along with generator methods (`send_block()`, `verify_block()`) designed for process-based simulation. These were removed during the code cleanup as they were never invoked by the event-loop engine. The engine uses a deterministic analytical model (min-heap CPU scheduling, static bandwidth formula) rather than a process-based discrete-event simulation. A future extension could reintroduce SimPy for full queuing-theory fidelity.
 
-### 1.3 Gossip Fanout Override
-**Bug (documented):** The Solana chain configuration defines a gossip fanout of 200 (modelling Turbine), but the engine's default of 8 always takes precedence due to a truthiness bug in the precedence logic: `config.gossip_fanout or chain_config.gossip_fanout` evaluates to 8 because 8 is truthy.
+### 1.3 Gossip Fanout Override — FIXED
+**Status: Resolved.** The engine previously used a default gossip fanout of 8 that always overrode chain-specific values due to a truthiness bug (`config.gossip_fanout or chain_config.gossip_fanout` evaluated to 8 because 8 is truthy). This has been corrected: the engine default is now 0, and the guard uses `if config.gossip_fanout` so that chain-specific fanout values (e.g., Solana's 200) take effect when configured.
 
-**Impact:** All results use fanout 8, which underestimates Solana's true propagation speed but also removes a potential amplification channel for bandwidth contention.
+**Historical note:** Prior sweep results generated before this fix used fanout 8 for all chains. Regenerating the sweep CSV (`python run_experiments.py`) is recommended to incorporate the corrected fanout logic.
 
 ### 1.4 Fixed Jitter Model
 **Simplification:** The engine uses a fixed coefficient of variation (CV = 0.15) for latency jitter on all routes, regardless of geographic distance. A more physically motivated distance-dependent CV model exists in `simulator/models/latency.py` but is only exercised in tests, not by the main simulation.
@@ -51,6 +51,20 @@ This document catalogues every assumption, simplification, and known limitation 
 
 ### 2.4 No Adaptive Block Sizes
 **Simplification:** Block sizes are fixed at the chain's static limit (6 MB for Solana, 4 MWU for Bitcoin, gas-limited for Ethereum). No dynamic block size adjustment is modelled. Real protocols may adopt adaptive block sizing to accommodate PQC transaction bloat.
+
+### 2.5 Solana MTU Constraint (1,232 Bytes)
+**Known limitation:** Solana enforces a maximum transmission unit (MTU) of 1,232 bytes per transaction packet (derived from IPv6 minimum MTU of 1,280 bytes minus 48 bytes of headers). Several PQC algorithms produce signatures that, combined with the transaction overhead, exceed this limit:
+
+| Algorithm | Sig + PK + Overhead | Exceeds 1,232 B? |
+|-----------|-------------------|-------------------|
+| ML-DSA-44 | 2,584 + 1,312 + 250 = 4,146 B | Yes (3.4×) |
+| ML-DSA-65 | 3,309 + 1,952 + 250 = 5,511 B | Yes (4.5×) |
+| SLH-DSA-128f | 17,088 + 32 + 250 = 17,370 B | Yes (14.1×) |
+| Falcon-512 | 666 + 897 + 250 = 1,813 B | Yes (1.5×) |
+
+**Impact:** Deploying any NIST PQC algorithm on Solana would require a protocol-level MTU increase or a signature compression scheme. The simulator models block-level capacity impact but does not enforce the per-transaction MTU constraint. A warning box is displayed in the Block Space Analysis tab when Solana is selected.
+
+**Note:** This is a fundamental protocol constraint, not a simulator limitation — no current PQC signature fits within Solana's packet size.
 
 ---
 
@@ -134,6 +148,11 @@ The `pqc_lib/` package provides actual cryptographic operations (or NIST-accurat
 
 ### 7.5 Signature Aggregation Not in Simulation
 `blockchain/aggregation.py` models BLS, Falcon Merkle Tree, and ML-DSA batch verification schemes analytically. These are not integrated into the DES simulation or the Streamlit UI — they exist as a standalone analysis module.
+
+### 7.6 No Turbine Modelling (Solana)
+**Limitation:** Solana's Turbine protocol (erasure-coded block sharding across neighbourhood trees) is not modelled. The simulator uses a flat gossip propagation model where each node forwards the full block to `fanout` peers. In practice, Turbine distributes ~64 KB "shreds" in a tree structure, which dramatically reduces per-node bandwidth requirements and propagation latency for large blocks.
+
+**Impact:** The simulator overestimates propagation delays for Solana at high PQC adoption (large blocks), because the flat-gossip model requires each node to transmit and receive the full block. Turbine's shredding would partially offset the block-size inflation from PQC signatures. This makes the simulator's Solana projections conservative — real-world degradation would likely be less severe than modelled, all else being equal.
 
 ---
 

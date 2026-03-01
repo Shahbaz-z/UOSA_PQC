@@ -111,9 +111,9 @@ else:
     print(f"  At threshold: {stale_threshold.iloc[0]['avg_stale_rate']:.4f}")
 
 # Threshold 3: TPS drops below 50% of baseline
+tps_100_pct = agg.loc[agg["pqc_fraction"] == 1.0, "avg_effective_tps"].values[0]
 tps_50_threshold = agg[agg["avg_effective_tps"] < baseline_tps * 0.5]
 if tps_50_threshold.empty:
-    tps_100_pct = agg.loc[agg["pqc_fraction"] == 1.0, "avg_effective_tps"].values[0]
     tps_ratio_100 = tps_100_pct / baseline_tps
     print(f"\nTPS 50% drop: NOT REACHED (even at 100% PQC)")
     print(f"  Baseline TPS: {baseline_tps:.1f}")

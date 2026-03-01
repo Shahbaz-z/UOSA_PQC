@@ -33,7 +33,7 @@ from simulator.core.phase2_engine import Phase2Engine, Phase2Config
 # Default sweep parameters
 # ---------------------------------------------------------------------------
 DEFAULT_CHAIN = "solana"
-DEFAULT_LAMBDA_TPS = 500.0
+DEFAULT_LAMBDA_TPS = 4000.0  # Must exceed block capacity under PQC to test saturation
 DEFAULT_MEMPOOL_BYTES = 100 * 1024 * 1024  # 100 MB
 DEFAULT_NUM_VALIDATORS = 50
 DEFAULT_NUM_FULL_NODES = 25

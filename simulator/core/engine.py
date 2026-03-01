@@ -1,23 +1,23 @@
 """Discrete Event Simulation engine for blockchain network propagation.
 
-CRITICAL DESIGN (per Quant Lead review):
+DESIGN NOTES:
 
-1. BANDWIDTH CONTENTION:
-   - Nodes cannot gossip to infinite peers simultaneously.
-   - Upload bandwidth is a finite resource.
-   - When a node sends a block, it consumes bandwidth for the transmission duration.
-   - Subsequent transmissions must wait (queue) if bandwidth is saturated.
+1. BANDWIDTH MODEL:
+   - Propagation delay is computed analytically from block size, link bandwidth,
+     and inter-node latency.  Full NIC-level contention is NOT modelled (each
+     gossip transmission is treated independently).  This is a known
+     simplification documented in ASSUMPTIONS_AND_LIMITATIONS.md.
 
 2. CPU CONTENTION:
-   - Nodes cannot verify infinite signatures in parallel.
-   - CPU cores are finite resources.
-   - Heavy PQC signatures (SLH-DSA: 3-8ms) physically block verification of
-     subsequent blocks.
-   - This creates realistic node saturation under PQC load.
+   - Verification times are scheduled on a per-core analytical heap:
+     each node tracks when each CPU core becomes free (`_core_free_at`).
+   - Heavy PQC signatures (SLH-DSA: 6–15 ms) physically delay verification
+     of subsequent blocks, creating realistic node saturation under PQC load.
 
 3. EVENT LOOP:
-   - Uses SimPy for process-based discrete event simulation.
-   - Events are scheduled on a priority queue (heapq).
+   - Uses a bespoke heapq-based priority queue for event scheduling.
+     (Originally prototyped with SimPy; replaced with an analytical min-heap
+     scheduler for performance and determinism.)
    - Time advances discretely between events.
    - All randomness is seeded for reproducibility.
 """
@@ -28,7 +28,6 @@ import logging
 import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable
-import simpy
 
 from simulator.core.events import EventType, Event
 from simulator.state import SimulationState
@@ -62,7 +61,7 @@ class SimulationConfig:
     block_size_limit_bytes: Optional[int] = None
 
     # Gossip parameters
-    gossip_fanout: int = 8  # Peers to forward to (overridden by chain config)
+    gossip_fanout: int = 0  # 0 = use chain config default
 
 
 class DESEngine:
@@ -78,9 +77,9 @@ class DESEngine:
     4. BLOCK_RECEIVED: Node receives block, queues for validation
     5. BLOCK_VALIDATED: Node validates block, forwards to peers
 
-    Resource contention is modeled using SimPy:
-    - Bandwidth: Transmissions consume NIC capacity
-    - CPU: Verifications consume CPU cores
+    Resource contention is modeled analytically:
+    - Bandwidth: propagation delay computed from block size / link speed
+    - CPU: verification scheduled on a per-core heap (_core_free_at)
     """
 
     def __init__(self, config: SimulationConfig):
@@ -92,8 +91,8 @@ class DESEngine:
         self.config = config
         self.rng = random.Random(config.random_seed)
 
-        # SimPy environment
-        self.env = simpy.Environment()
+        # Simulation clock (pure analytical; no SimPy dependency)
+        self._clock_ms: float = 0.0
 
         # Load chain configuration
         self.chain_config = get_chain_config(config.chain)
@@ -103,7 +102,7 @@ class DESEngine:
         self.block_size_limit = (
             config.block_size_limit_bytes or self.chain_config.block_size_limit
         )
-        self.gossip_fanout = config.gossip_fanout or self.chain_config.gossip_fanout
+        self.gossip_fanout = config.gossip_fanout if config.gossip_fanout else self.chain_config.gossip_fanout
 
         # Network components
         self.topology = NetworkTopology(rng=self.rng)
@@ -137,7 +136,7 @@ class DESEngine:
                 rng=self.rng,
                 is_validator=True,
             )
-            node = Node(node_config, self.env)
+            node = Node(node_config, env=None)
             self.topology.add_node(node)
 
         # Create full nodes
@@ -148,7 +147,7 @@ class DESEngine:
                 region=region,
                 rng=self.rng,
             )
-            node = Node(node_config, self.env)
+            node = Node(node_config, env=None)
             self.topology.add_node(node)
 
         logger.debug(
@@ -377,7 +376,22 @@ class DESEngine:
     # -------------------------------------------------------------------------
 
     def _create_block(self, proposer: Node) -> Block:
-        """Create a block filled with transactions."""
+        """Create a block filled with transactions.
+
+        CAPACITY MODEL NOTE:
+            For Solana, block_size_limit is in bytes and tx_size is in bytes —
+            the division is physically correct.
+
+            For Bitcoin (weight units) and Ethereum (gas), the engine treats
+            block_size_limit and base_tx_overhead as generic "capacity units" and
+            computes max_txs = capacity // per_tx_cost.  This is a deliberate
+            simplification: the DES engine's purpose is to study PROPAGATION
+            effects (bandwidth × block_bytes), not to replicate the exact
+            Bitcoin/Ethereum transaction selection algorithm.  The static
+            block-space analysis in `blockchain/chain_models.py` uses the
+            precise per-chain formulas (SegWit weight, EVM gas) for throughput
+            figures shown in the UI.
+        """
         from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
 
         # Calculate transaction size with current signature algorithm
