@@ -1,4 +1,4 @@
-"""Tab 1: Overview \u2014 landing page with onboarding, vulnerability context, and
+"""Tab 1: Overview — landing page with onboarding, vulnerability context, and
 cross-chain throughput comparison.
 
 Merges the old Cross-Chain Summary tab (Tab 3) with a new introductory section
@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 
 from blockchain.chain_models import (
     compare_all_solana, compare_all_bitcoin, compare_all_ethereum,
+    PUBLIC_KEY_SIZES,
     SOLANA_VOTE_TX_PCT_REALISTIC,
     SOLANA_BLOCK_SIZE_BYTES,
     SOLANA_BASE_TX_OVERHEAD,
@@ -24,7 +25,7 @@ from app.utils import format_bytes, throughput_impact_category, threat_badge, CH
 # ---------------------------------------------------------------------------
 # Cached computation (eliminates redundant recomputation on re-renders)
 # ---------------------------------------------------------------------------
-@st.cache_data(show_spinner="Computing cross-chain analyses \u2026")
+@st.cache_data(show_spinner="Computing cross-chain analyses …")
 def _get_default_analyses():
     """Run all three chain analyses with default parameters (cached)."""
     return (
@@ -38,7 +39,7 @@ def _get_default_analyses():
 # Heatmap chart (replaces the plain table from old Tab 3)
 # ---------------------------------------------------------------------------
 def _retention_heatmap(sol_comp, btc_comp, eth_comp) -> go.Figure:
-    """Create a throughput-retention heatmap: algorithms \u00d7 chains."""
+    """Create a throughput-retention heatmap: algorithms × chains."""
     highlight_algos = ["Falcon-512", "ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "SLH-DSA-128s"]
     chains = ["Solana", "Bitcoin", "Ethereum"]
     comps = [sol_comp, btc_comp, eth_comp]
@@ -98,7 +99,7 @@ def render(tab, chain_quantum_context: dict) -> None:
             "then explore the **Algorithms** tab to benchmark PQC schemes, the **Block-Space** "
             "tab for per-chain impact, and the **PQC Shock** tab for Monte Carlo network "
             "simulation results.",
-            icon="\U0001f9ed",
+            icon="🧭",
         )
 
         # ---- Two-column intro ----
@@ -140,7 +141,8 @@ def render(tab, chain_quantum_context: dict) -> None:
             color = "#d62728"  # red
 
         available_space = int(SOLANA_BLOCK_SIZE_BYTES * 0.30)  # 30% for user txs after votes
-        tx_size = SOLANA_BASE_TX_OVERHEAD + sig_size
+        pk_size = PUBLIC_KEY_SIZES.get(sig_name, 32)
+        tx_size = SOLANA_BASE_TX_OVERHEAD + sig_size + pk_size
         txs_per_block = available_space // tx_size
         tps = txs_per_block / (SOLANA_SLOT_TIME_MS / 1000)
 
@@ -156,7 +158,7 @@ def render(tab, chain_quantum_context: dict) -> None:
 
         # Show the impact
         if toggle_mode != "Classical (Ed25519)":
-            ed_tx = SOLANA_BASE_TX_OVERHEAD + 64
+            ed_tx = SOLANA_BASE_TX_OVERHEAD + 64 + PUBLIC_KEY_SIZES.get("Ed25519", 32)
             ed_txs = available_space // ed_tx
             retention = txs_per_block / ed_txs
             st.warning(
@@ -201,11 +203,21 @@ def render(tab, chain_quantum_context: dict) -> None:
             "switching to a PQC signature scheme. Solana uses realistic (70% vote overhead) parameters."
         )
         st.plotly_chart(_retention_heatmap(sol_comp, btc_comp, eth_comp), use_container_width=True)
+        # Compute dynamic Falcon-512 retention for the info box
+        _f512_sol = next((a for a in sol_comp.analyses if a.signature_type == "Falcon-512"), None)
+        _f512_btc = next((a for a in btc_comp.analyses if a.signature_type == "Falcon-512"), None)
+        _f512_eth = next((a for a in eth_comp.analyses if a.signature_type == "Falcon-512"), None)
+        _f512_range = ""
+        if _f512_sol and _f512_btc and _f512_eth:
+            _f512_vals = [_f512_sol.relative_to_baseline, _f512_btc.relative_to_baseline, _f512_eth.relative_to_baseline]
+            _f512_range = f"retaining {min(_f512_vals):.0%}–{max(_f512_vals):.0%}"
+        else:
+            _f512_range = "retaining the most throughput"
         st.info(
             "**So what?** This heatmap shows the percentage of current throughput each chain "
             "retains after switching to PQC signatures. Green = minimal impact, red = severe. "
-            "Notice Falcon-512 stays green across all chains (retaining 80-90%), while SLH-DSA-128s "
-            "drops to under 5% on Solana \u2014 meaning 95% of transactions would no longer fit in a block.",
+            f"Notice Falcon-512 is the strongest PQC option across all chains ({_f512_range}), while SLH-DSA-128s "
+            "drops to under 5% on Solana — meaning 95% of transactions would no longer fit in a block.",
             icon="\U0001f4a1"
         )
 
@@ -233,12 +245,14 @@ def render(tab, chain_quantum_context: dict) -> None:
 
         # ---- Best PQC per Chain ----
         st.subheader("Best PQC Option Per Chain")
+        # Classical algorithms are not post-quantum — exclude from PQC ranking
+        _CLASSICAL = {"Ed25519", "ECDSA", "Schnorr", "BLS12-381"}
         for chain_name, chain_comp in [("Solana", sol_comp), ("Bitcoin", btc_comp), ("Ethereum", eth_comp)]:
-            best = max(
-                [a for a in chain_comp.analyses if a.signature_type != chain_comp.baseline.signature_type],
-                key=lambda a: a.txs_per_block,
-            )
-            worst = min(chain_comp.analyses, key=lambda a: a.txs_per_block)
+            pqc_only = [a for a in chain_comp.analyses if a.signature_type not in _CLASSICAL]
+            if not pqc_only:
+                continue
+            best = max(pqc_only, key=lambda a: a.txs_per_block)
+            worst = min(pqc_only, key=lambda a: a.txs_per_block)
 
             with st.expander(f"{chain_name}: Best = {best.signature_type}, Worst = {worst.signature_type}"):
                 b1, b2 = st.columns(2)

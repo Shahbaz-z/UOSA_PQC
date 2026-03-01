@@ -72,8 +72,9 @@ def _no_agg_pk(n: int, _base_sig: int, base_pk: int) -> int:
 
 
 def _bls_sig(n: int, _base_sig: int, _base_pk: int) -> int:
-    # BLS aggregate signature is constant 48 bytes regardless of n
-    return 48
+    # BLS12-381 aggregate signature is a single G2 point = 96 bytes compressed,
+    # regardless of n.  (G1 = 48 B for public keys; G2 = 96 B for signatures.)
+    return 96
 
 
 def _bls_pk(n: int, _base_sig: int, _base_pk: int) -> int:
@@ -82,10 +83,12 @@ def _bls_pk(n: int, _base_sig: int, _base_pk: int) -> int:
 
 
 def _falcon_tree_sig(n: int, base_sig: int, _base_pk: int) -> int:
-    # Merkle tree: one signature + log2(n) hashes (32 bytes each)
+    # Merkle tree: each of the n signers contributes one signature + a
+    # log2(n)-depth Merkle authentication path (32 bytes per hash node).
+    # Total = n × (base_sig + 32 × ceil(log2(n))).
     if n <= 1:
         return base_sig
-    return base_sig + 32 * math.ceil(math.log2(n))
+    return n * (base_sig + 32 * math.ceil(math.log2(n)))
 
 
 def _falcon_tree_pk(n: int, _base_sig: int, _base_pk: int) -> int:
@@ -116,7 +119,7 @@ AGGREGATION_SCHEMES: Dict[str, AggregationScheme] = {
     "BLS": AggregationScheme(
         name="BLS Aggregation (BLS12-381)",
         description=(
-            "BLS aggregate signatures compress n signatures into a single 48-byte "
+            "BLS aggregate signatures compress n signatures into a single 96-byte "
             "aggregate. Public keys are not aggregated. NOT quantum-resistant "
             "(pairing-based, broken by Shor's algorithm)."
         ),

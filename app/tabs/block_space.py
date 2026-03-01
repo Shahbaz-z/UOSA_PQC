@@ -206,6 +206,14 @@ def _render_solana_section(num_signers: int):
             "is consumed by validator vote transactions. Use the vote overhead slider "
             "to model realistic vs theoretical capacity."
         )
+    st.warning(
+        "**⚠️ Protocol Constraint:** Solana transactions are limited to **1,232 bytes** "
+        "(IPv6 MTU). ML-DSA-65 signatures alone are 3,309 B — exceeding this hard "
+        "limit. Deploying lattice-based PQC on Solana would require core protocol "
+        "changes to support multi-packet transaction assembly. This simulator "
+        "calculates the *block-space* impact assuming such protocol changes are made.",
+        icon="⚠️"
+    )
 
     # Scenario selectbox replaces 4 buttons + st.rerun()
     scenario = st.selectbox(
@@ -329,7 +337,7 @@ def _render_ethereum_section(num_signers: int):
             "- **21,000 gas** base intrinsic cost\n"
             "- **16 gas per non-zero byte** of calldata (signature + public key)\n\n"
             "**2026 Gas Limit Increases:** Ethereum is increasing block gas limits from "
-            "30M (2024) \u2192 60M (current) \u2192 100M+ (roadmap target). Use presets to model future capacity."
+            "30M (2024) → 60M (current) → 100M+ (roadmap target). Use presets to model future capacity."
         )
 
     scenario = st.selectbox(
@@ -406,9 +414,9 @@ def _render_results_table(comp, chain_key: str, num_signers: int) -> None:
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
     st.info(
         "**So what?** This shows how many transactions fit in one block when using each "
-        "signature scheme. The 'vs Baseline' column is the key metric \u2014 any value below "
+        "signature scheme. The 'vs Baseline' column is the key metric — any value below "
         "100% means fewer transactions per block, directly reducing the chain's throughput.",
-        icon="\U0001f4a1",
+        icon="💡",
     )
 
     csv_data = pd.DataFrame([
@@ -433,10 +441,10 @@ def _render_results_table(comp, chain_key: str, num_signers: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Key Findings \u2014 now rendered ABOVE charts
+# Key Findings — now rendered ABOVE charts
 # ---------------------------------------------------------------------------
 def _render_key_findings(comp, chain: str) -> None:
-    """Render key findings metric cards \u2014 placed directly after the results table."""
+    """Render key findings metric cards — placed directly after the results table."""
     st.divider()
     st.subheader("Key Findings")
     baseline = comp.baseline
@@ -478,12 +486,12 @@ def _render_key_findings(comp, chain: str) -> None:
         f"Falcon-512 signatures (**{falcon_size} B**) are **{falcon_ratio}x smaller** "
         f"than ML-DSA-44 (**{mldsa_size:,} B**), making Falcon the most block-space "
         "efficient PQC signature scheme for blockchain applications.",
-        icon="\U0001f4a1",
+        icon="💡",
     )
 
 
 # ---------------------------------------------------------------------------
-# Charts \u2014 now rendered BELOW key findings
+# Charts — now rendered BELOW key findings
 # ---------------------------------------------------------------------------
 def _render_charts(comp, chain: str) -> None:
     """Render the three Plotly charts."""

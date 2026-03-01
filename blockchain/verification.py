@@ -59,6 +59,23 @@ class VerificationResult:
 #   - arxiv 2510.09271v1: ML-DSA Level 5 → 0.14 ms on ARM
 #     https://arxiv.org/html/2510.09271v1
 #
+# CONSERVATIVE MARGIN (3-4× above ideal benchmarks):
+#   The wolfSSL/liboqs numbers above represent ideal conditions: optimised C
+#   with AVX2 intrinsics on a high-end Intel desktop CPU.  Real-world validator
+#   nodes exhibit significantly higher verification latencies due to:
+#     1. Commodity hardware diversity — ARM servers (AWS Graviton, Ampere Altra)
+#        lack AVX2; ARM ML-DSA-87 benchmarks show 140 µs vs ~39 µs on x86/AVX2.
+#     2. Software-stack overhead — reference/portable C implementations (without
+#        AVX2 assembly) run 2-3× slower than optimised builds.
+#     3. Concurrent load — validators verify blocks while simultaneously running
+#        consensus, networking, and state-machine execution on shared cores.
+#     4. OS jitter and memory pressure — context switches, TLB flushes, and cache
+#        contention add 20-50% latency variance on production nodes.
+#   Applying a ~3× conservative multiplier accounts for these real-world effects.
+#   Crucially, even with this penalty, PQC verification remains a NON-BOTTLENECK:
+#   ML-DSA-65 at 300 µs × 100 txs = 30 ms — still just 7.5% of Solana's 400 ms
+#   slot time.  The block-space (signature size) impact dominates.
+#
 # SLH-DSA RELATIVE SCALING (Cloudflare blog, Nov 2024):
 #   https://blog.cloudflare.com/another-look-at-pq-signatures/
 #   SLH-DSA-128f verify ≈ 110× ML-DSA-44 baseline → 110 × 54 ≈ 5,940 µs

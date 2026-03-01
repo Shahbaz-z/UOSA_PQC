@@ -57,8 +57,8 @@ CHAIN_QUANTUM_CONTEXT = {
         "recommended_pqc": "Falcon-512",
         "recommendation_reason": (
             "Falcon-512 (666 B) offers the smallest PQC signatures, preserving "
-            "~80% of baseline throughput. ML-DSA-65 (NIST recommended) retains "
-            "~62% but provides a stronger security margin."
+            "~19% of baseline throughput (with 70% vote overhead). ML-DSA-65 "
+            "(NIST recommended) retains ~6%. Without vote overhead, retention is higher."
         ),
     },
     "Bitcoin": {
@@ -78,7 +78,7 @@ CHAIN_QUANTUM_CONTEXT = {
         ),
         "recommended_pqc": "Falcon-512",
         "recommendation_reason": (
-            "Falcon-512 benefits most from the SegWit discount and retains ~85% "
+            "Falcon-512 benefits most from the SegWit discount and retains ~33% "
             "of baseline capacity. Hybrid ECDSA+Falcon provides backward "
             "compatibility during a transition period."
         ),
@@ -90,7 +90,7 @@ CHAIN_QUANTUM_CONTEXT = {
             "Ethereum's ECDSA signatures are vulnerable to Shor's algorithm. "
             "The gas-based cost model means PQC migration cost scales with "
             "calldata size (16 gas/byte). The planned gas limit increases "
-            "(30M \u2192 60M (current) \u2192 100M+ (roadmap target)) provide a natural buffer for absorbing "
+            "(30M → 60M (current) → 100M+ (roadmap target)) provide a natural buffer for absorbing "
             "larger PQC signatures."
         ),
         "migration_challenge": (
@@ -118,9 +118,9 @@ def _patch_retention_percentages():
         btc = compare_all_bitcoin()
         eth = compare_all_ethereum()
 
-        def _retention(analyses, algo):
-            for a in analyses:
-                if a.algorithm == algo:
+        def _retention(comp, algo):
+            for a in comp.analyses:
+                if a.signature_type == algo:
                     return a.relative_to_baseline * 100
             return None
 
@@ -158,7 +158,7 @@ _patch_retention_percentages()
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="PQC Cross-Chain Simulator",
-    page_icon="\u26d3\ufe0f",
+    page_icon="⛓️",
     layout="wide",
 )
 
@@ -166,27 +166,27 @@ st.set_page_config(
 # Sidebar -- redesigned: navigation first, then reference material
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("\u26d3\ufe0f PQC Chain Simulator")
+    st.title("⛓️ PQC Chain Simulator")
 
     if MOCK_MODE:
         st.info(
-            "**Demonstration mode** \u2014 liboqs not installed. "
+            "**Demonstration mode** — liboqs not installed. "
             "Signature sizes and all blockchain calculations are NIST-accurate. "
             "Timing values are synthetic.",
-            icon="\u2139\ufe0f",
+            icon="ℹ️",
         )
     else:
-        st.success("**Real mode** -- liboqs detected.", icon="\u2705")
+        st.success("**Real mode** -- liboqs detected.", icon="✅")
 
     st.divider()
 
     # Navigation guidance -- now at the TOP of the sidebar
     st.caption("NAVIGATION")
     st.markdown(
-        "1. **Overview** \u2014 Start here for context\n"
-        "2. **Algorithms** \u2014 Benchmark PQC schemes\n"
-        "3. **Block-Space** \u2014 Per-chain impact analysis\n"
-        "4. **PQC Shock** \u2014 Monte Carlo simulation results"
+        "1. **Overview** — Start here for context\n"
+        "2. **Algorithms** — Benchmark PQC schemes\n"
+        "3. **Block-Space** — Per-chain impact analysis\n"
+        "4. **PQC Shock** — Monte Carlo simulation results"
     )
 
     st.divider()
@@ -252,17 +252,17 @@ st.caption(
 st.markdown("---")
 col_tldr1, col_tldr2, col_tldr3 = st.columns(3)
 with col_tldr1:
-    st.metric("The Problem", "10-700\u00d7", help="PQC signatures are 10-700\u00d7 larger than classical ones")
-    st.caption("PQC signatures are 10-700\u00d7 larger than classical, directly reducing blockchain throughput")
+    st.metric("The Problem", "10-700×", help="PQC signatures are 10-700× larger than classical ones")
+    st.caption("PQC signatures are 10-700× larger than classical, directly reducing blockchain throughput")
 with col_tldr2:
-    st.metric("The Finding", "~89% PQC \u2192 Failure", help="At ~89% PQC adoption, Solana's stale rate exceeds 30%")
-    st.caption("Block-size bloat (not computation) is the bottleneck \u2014 propagation delay causes stale blocks")
+    st.metric("The Finding", "~89% PQC → Failure", help="At ~89% PQC adoption, Solana's stale rate exceeds 30%")
+    st.caption("Block-size bloat (not computation) is the bottleneck — propagation delay causes stale blocks")
 with col_tldr3:
     st.metric("The Solution", "Falcon-512", help="Smallest PQC signature retains most throughput")
     try:
-        sol_analyses = compare_all_solana()
-        _f512 = next((a for a in sol_analyses if a.algorithm == "Falcon-512"), None)
-        _mldsa = next((a for a in sol_analyses if a.algorithm == "ML-DSA-65"), None)
+        _sol_comp = compare_all_solana()
+        _f512 = next((a for a in _sol_comp.analyses if a.signature_type == "Falcon-512"), None)
+        _mldsa = next((a for a in _sol_comp.analyses if a.signature_type == "ML-DSA-65"), None)
         _tldr_text = (
             f"Falcon-512 (666 B) retains ~{_f512.relative_to_baseline*100:.0f}% throughput. "
             f"ML-DSA-65 (3.3 KB, NIST recommended) retains ~{_mldsa.relative_to_baseline*100:.0f}%"
@@ -275,13 +275,13 @@ with col_tldr3:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Tab layout -- NEW order: Overview \u2192 Algorithms \u2192 Block-Space \u2192 PQC Shock
+# Tab layout -- NEW order: Overview → Algorithms → Block-Space → PQC Shock
 # ---------------------------------------------------------------------------
 tab_overview, tab_compare, tab_block, tab_shock = st.tabs([
-    "\U0001f9ed Overview",
-    "\u2696\ufe0f Algorithms",
-    "\U0001f4ca Block-Space",
-    "\U0001f4a5 PQC Shock",
+    "🧭 Overview",
+    "⚖️ Algorithms",
+    "📊 Block-Space",
+    "💥 PQC Shock",
 ])
 
 render_overview(tab_overview, CHAIN_QUANTUM_CONTEXT)
