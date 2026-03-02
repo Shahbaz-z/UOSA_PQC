@@ -18,10 +18,10 @@ This document catalogues every assumption, simplification, and known limitation 
 
 **Note:** The `Node` class originally included SimPy Container resources for bandwidth queuing (`_upload_bw`, `_download_bw`) and SimPy Resource for CPU contention (`_cpu`), along with generator methods (`send_block()`, `verify_block()`) designed for process-based simulation. These were removed during the code cleanup as they were never invoked by the event-loop engine. The engine uses a deterministic analytical model (min-heap CPU scheduling, static bandwidth formula) rather than a process-based discrete-event simulation. A future extension could reintroduce SimPy for full queuing-theory fidelity.
 
-### 1.3 Gossip Fanout Override — FIXED
-**Status: Resolved.** The engine previously used a default gossip fanout of 8 that always overrode chain-specific values due to a truthiness bug (`config.gossip_fanout or chain_config.gossip_fanout` evaluated to 8 because 8 is truthy). This has been corrected: the engine default is now 0, and the guard uses `if config.gossip_fanout` so that chain-specific fanout values (e.g., Solana's 200) take effect when configured.
+### 1.3 Gossip Fanout Override — FIXED (post-sweep)
+**Status: Resolved in code, but sweep data pre-dates the fix.** The engine previously used a default gossip fanout of 8 that always overrode chain-specific values due to a truthiness bug (`config.gossip_fanout or chain_config.gossip_fanout` evaluated to 8 because 8 is truthy). This has been corrected: the engine default is now 0, and the guard uses `if config.gossip_fanout` so that chain-specific fanout values (e.g., Solana's 200) take effect when configured.
 
-**Historical note:** Prior sweep results generated before this fix used fanout 8 for all chains. Regenerating the sweep CSV (`python run_experiments.py`) is recommended to incorporate the corrected fanout logic.
+**Important:** All sweep CSV data (including the λ=4,000 production sweep and sensitivity sweeps) was generated **before** this fix was applied, and therefore uses fanout-8 flat gossip for all chains. The fanout-8 model does not replicate Solana's Turbine tree-routing; it is a simplified flat gossip model. Regenerating the sweep with the corrected fanout logic would yield different propagation dynamics but has not been performed for this analysis.
 
 ### 1.4 Fixed Jitter Model
 **Simplification:** The engine uses a fixed coefficient of variation (CV = 0.15) for latency jitter on all routes, regardless of geographic distance. A more physically motivated distance-dependent CV model exists in `simulator/models/latency.py` but is only exercised in tests, not by the main simulation.
@@ -76,11 +76,11 @@ This document catalogues every assumption, simplification, and known limitation 
 | Algorithm | wolfSSL (µs) | Simulator (µs) | Margin |
 |-----------|-------------|----------------|--------|
 | Ed25519 | 44 | 60 | 1.36× |
-| ML-DSA-44 | 166 | 550 | 3.3× |
-| ML-DSA-65 | 265 | 940 | 3.5× |
-| ML-DSA-87 | 403 | 1,500 | 3.7× |
+| ML-DSA-44 | 54 | 180 | 3.3× |
+| ML-DSA-65 | 87 | 300 | 3.4× |
+| ML-DSA-87 | 140 | 500 | 3.6× |
 | SLH-DSA-128f | ~1,500 | 5,940 | ~4.0× |
-| Falcon-512 | ~70 | 245 | 3.5× |
+| Falcon-512 | ~30 | 100 | 3.3× |
 
 **Asymmetric margins:** PQC algorithms use 3–4× margins (accounting for unoptimised real-world implementations, validator hardware variance, and the relative immaturity of PQC software). Ed25519 uses a modest 1.36× margin (mature, heavily optimised implementations). This asymmetry is a deliberate design choice that makes PQC look relatively worse versus classical — the intent is conservative (worst-case) modelling.
 
@@ -98,12 +98,12 @@ This document catalogues every assumption, simplification, and known limitation 
 ## 4. Baseline Calibration
 
 ### 4.1 Simulator vs Mainnet
-At 0% PQC adoption, the simulator produces a mean stale rate of 0.0% with a P90 propagation delay of 215 ms (53.8% of the 400 ms slot). By comparison, Solana mainnet's observed slot skip rate during 2024–2025 is approximately 5%.
+At 0% PQC adoption, the simulator produces a mean stale rate of 0.0% with a P90 propagation delay of 186 ms (46.4% of the 400 ms slot). By comparison, Solana mainnet's observed slot skip rate during 2024–2025 is approximately 5%.
 
 **Why the difference:** The simulator intentionally isolates the PQC signature-size channel by holding all other factors constant. The mainnet skip rate reflects additional real-world factors: validator software bugs, consensus voting overhead, leader rotation latency, clock drift, and transient network partitions — none of which relate to signature size or verification time.
 
 ### 4.2 Propagation Model Validation
-The 215 ms P90 baseline is consistent with Decker and Wattenhofer's empirical propagation model (IEEE P2P, 2013) for ~70 KB blocks on a 75-node network with heterogeneous bandwidth.
+The 186 ms P90 baseline is consistent with Decker and Wattenhofer's empirical propagation model (IEEE P2P, 2013) for ~563 KB blocks on a 75-node network with heterogeneous bandwidth.
 
 ---
 
@@ -112,7 +112,7 @@ The 215 ms P90 baseline is consistent with Decker and Wattenhofer's empirical pr
 ### 5.1 Solana-Only DES Simulation
 The Monte Carlo DES simulation (sweep CSV, sensitivity CSVs) was only run for a Solana-like chain. This is a deliberate design choice, not an omission.
 
-**Rationale:** The DES engine targets **propagation latency** as the failure mode — the risk that PQC-inflated blocks cannot propagate within a chain's slot/block time, producing stale blocks. Solana's 400 ms slot is the only major chain where this failure mode is physically plausible: the measured P90 propagation at 100% PQC (~341 ms) consumes 85% of the slot budget. By contrast, the same 341 ms is only 2.8% of Ethereum's 12 s block time and 0.06% of Bitcoin's 10-minute block time — propagation is not a binding constraint.
+**Rationale:** The DES engine targets **propagation latency** as the failure mode — the risk that PQC-inflated blocks cannot propagate within a chain's slot/block time, producing stale blocks. Solana's 400 ms slot is the only major chain where this failure mode is physically plausible: the measured P90 propagation at 100% PQC (~381 ms) consumes 95.3% of the slot budget. By contrast, the same 381 ms is only 3.2% of Ethereum's 12 s block time and 0.06% of Bitcoin's 10-minute block time — propagation is not a binding constraint.
 
 Bitcoin and Ethereum face a **different failure mode**: capacity-bounded throughput collapse, where PQC signatures consume the block-weight budget (Bitcoin SegWit) or gas budget (Ethereum EVM) far faster than classical signatures. This is modelled exactly in the static Block-Space Analysis (Phase 1), which uses each chain's native cost model (SegWit weight units for Bitcoin, gas accounting for Ethereum). A DES simulation would add no additional insight for these chains because their block times provide orders-of-magnitude propagation headroom.
 

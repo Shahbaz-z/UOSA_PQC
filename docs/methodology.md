@@ -57,7 +57,7 @@ This discount means PQC signatures (which are all witness data) benefit from the
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| Block gas limit | 30,000,000 | 2024 baseline; roadmap targets up to 180M by 2026 |
+| Block gas limit | 60,000,000 | Current baseline (as of early 2026); roadmap targets up to 180M |
 | Base tx gas | 21,000 | Intrinsic transaction gas (EIP-2718) |
 | Calldata gas | 16 gas/byte | Non-zero byte calldata cost |
 | Base tx overhead | 120 B | Non-signature calldata (to, value, nonce, etc.) |
@@ -70,8 +70,8 @@ This discount means PQC signatures (which are all witness data) benefit from the
 | Period | Gas Limit |
 |--------|-----------|
 | 2024 baseline | 30,000,000 |
-| 2025 current | 36,000,000 |
-| 2026 Q1 | 60,000,000 |
+| 2025 mid-year | 36,000,000 |
+| 2025 Q4 / 2026 Q1 | 60,000,000 |
 | 2026 Q2 | 80,000,000 |
 | 2026 target | 180,000,000 |
 
@@ -92,7 +92,7 @@ Models how long it takes to verify all signatures in a block, identifying whethe
 | Falcon-512 | 100 | 1.0x | liboqs (fast verify) |
 | Falcon-1024 | 200 | 1.0x | liboqs |
 | SLH-DSA-128s | 3,000 | 1.0x | liboqs (hash-heavy) |
-| SLH-DSA-128f | 500 | 1.0x | liboqs |
+| SLH-DSA-128f | 5,940 | 1.0x | liboqs (hash-heavy) |
 | SLH-DSA-256f | 2,000 | 1.0x | liboqs |
 
 ### 3.2 Block Verification Model
