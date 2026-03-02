@@ -12,7 +12,7 @@ Blockchains rely on digital signatures (Ed25519, ECDSA, Schnorr) that are vulner
 
 ### Key Finding
 
-At ~89% PQC adoption (default 30/50/20 mix of ML-DSA-44/ML-DSA-65/SLH-DSA-128f), the network crosses a catastrophic threshold: mean stale rate exceeds 30%, block sizes reach 21× baseline, and propagation P90 consumes 85% of the 400 ms slot. The bottleneck is **bandwidth (block bloat), not compute (verification time)** — verification uses only ~8% of the slot even at 100% PQC.
+At ~37% PQC adoption (default 30/50/20 mix of ML-DSA-44/ML-DSA-65/SLH-DSA-128f), the network crosses a catastrophic threshold: mean stale rate exceeds 30%, block sizes reach 10.4× baseline, and propagation P90 consumes 95% of the 400 ms slot. The bottleneck is **bandwidth (block bloat), not compute (verification time)** — verification uses only ~16% of the slot even at 100% PQC.
 
 ### UI Tabs
 
