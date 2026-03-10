@@ -68,11 +68,11 @@ class NodeState:
 
 
 class Node:
-    """A network node with bandwidth and CPU constraints.
+    """A network node with bandwidth, CPU, and NIC constraints.
 
     CPU queuing is modelled analytically via _core_free_at (min-heap).
-    Bandwidth is used only to compute transmission time; no SimPy
-    containers are required.
+    NIC contention is modelled via _upload_free_at: when a node sends
+    to K peers simultaneously, its upload bandwidth is shared K ways.
     """
 
     def __init__(self, config: NodeConfig, env):
@@ -88,10 +88,14 @@ class Node:
 
         # ---- Analytical CPU scheduling queue ----
         # Tracks when each core becomes free (min-heap of timestamps).
-        # Models the same queuing physics as a SimPy Resource without
-        # requiring env.run(), integrating with the custom event loop.
         self._core_free_at: List[float] = [0.0] * config.cpu_cores
         heapq.heapify(self._core_free_at)
+
+        # ---- NIC upload scheduling queue ----
+        # Tracks when the upload link becomes free.
+        # When multiple sends overlap, they share bandwidth.
+        # Each entry: finish_time_ms of a scheduled upload.
+        self._upload_free_at: float = 0.0
 
     @property
     def node_id(self) -> str:
@@ -177,6 +181,52 @@ class Node:
         self.state.total_verification_time_ms += verify_duration_ms
 
         return completion_time
+
+    def schedule_upload(
+        self,
+        start_time_ms: float,
+        size_bytes: int,
+        num_concurrent: int = 1,
+    ) -> float:
+        """Schedule an upload and return the transmission finish time.
+
+        Models NIC contention: when sending to K peers concurrently,
+        each send gets upload_bandwidth / K effective bandwidth.
+
+        The upload link is modelled as a single resource. If a new
+        send starts while a previous send is in progress, both share
+        the bandwidth (simplified: we use num_concurrent to split).
+
+        Args:
+            start_time_ms: When this upload begins.
+            size_bytes: Bytes to transmit.
+            num_concurrent: How many peers are being sent to simultaneously.
+
+        Returns:
+            Finish time in milliseconds.
+        """
+        if self.config.upload_bandwidth_mbps <= 0 or num_concurrent <= 0:
+            return float("inf")
+
+        # Effective bandwidth per peer when sharing the NIC
+        per_peer_bw_mbps = self.config.upload_bandwidth_mbps / num_concurrent
+
+        # Transmission time for this chunk
+        size_megabits = (size_bytes * 8) / 1_000_000
+        tx_time_ms = (size_megabits / per_peer_bw_mbps) * 1000
+
+        # Upload can't start before link is free from previous sends
+        actual_start = max(start_time_ms, self._upload_free_at)
+        finish_time = actual_start + tx_time_ms
+
+        # Update NIC availability (the link is busy until the slowest
+        # concurrent send finishes)
+        self._upload_free_at = max(self._upload_free_at, finish_time)
+
+        # Update stats
+        self.state.bytes_uploaded += size_bytes
+
+        return finish_time
 
     def has_seen_block(self, block_hash: str) -> bool:
         """Check if this node has already seen a block."""

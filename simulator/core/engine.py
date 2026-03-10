@@ -35,6 +35,11 @@ from simulator.results import SimulationResult
 from simulator.network.node import Node, NodeConfig
 from simulator.network.topology import NetworkTopology, REGIONS
 from simulator.network.propagation import Block, Transaction
+from simulator.network.routing import (
+    RoutingStrategy,
+    GossipRouting,
+    get_routing_strategy,
+)
 from simulator.chains.base import get_chain_config, ChainConfig
 from simulator.models.bandwidth import (
     sample_validator_config,
@@ -62,6 +67,10 @@ class SimulationConfig:
 
     # Gossip parameters
     gossip_fanout: int = 0  # 0 = use chain config default
+
+    # Realism flags (Phase B upgrades)
+    nic_contention_enabled: bool = True   # Model upload bandwidth sharing
+    use_chain_routing: bool = True        # Use chain-specific routing strategy
 
 
 class DESEngine:
@@ -103,6 +112,15 @@ class DESEngine:
             config.block_size_limit_bytes or self.chain_config.block_size_limit
         )
         self.gossip_fanout = config.gossip_fanout if config.gossip_fanout else self.chain_config.gossip_fanout
+
+        # Routing strategy
+        if config.use_chain_routing:
+            self.routing = get_routing_strategy(config.chain)
+        else:
+            self.routing = GossipRouting(fanout=self.gossip_fanout)
+
+        # NIC contention flag
+        self.nic_contention_enabled = config.nic_contention_enabled
 
         # Network components
         self.topology = NetworkTopology(rng=self.rng)
@@ -265,10 +283,12 @@ class DESEngine:
         )
 
     def _handle_block_propagated(self, event: Event) -> None:
-        """Handle block propagation: send to gossip peers.
+        """Handle block propagation: send to peers via routing strategy.
 
-        CRITICAL: This models bandwidth contention by computing
-        transmission time based on block size and bottleneck bandwidth.
+        Phase B upgrades:
+        1. Uses chain-specific routing (Turbine, compact block, ETH hybrid)
+        2. Models NIC contention: upload bandwidth shared across concurrent sends
+        3. Uses actual byte sizes for propagation (not gas/weight units)
         """
         block_hash = event.payload["block_hash"]
         sender_id = event.payload["sender_id"]
@@ -278,20 +298,52 @@ class DESEngine:
         if not block:
             return
 
-        # Select peers for gossip (exclude those who already have the block)
-        peers = self._select_gossip_peers(sender, block)
+        # Determine which nodes already have the block
+        already_seen = set(block.first_seen_by.keys())
 
-        for peer in peers:
-            if peer.has_seen_block(block_hash):
+        # Use routing strategy to plan propagation
+        tasks = self.routing.plan_propagation(
+            sender=sender,
+            block=block,
+            all_nodes=self.topology.nodes,
+            already_seen=already_seen,
+            rng=self.rng,
+        )
+
+        if not tasks:
+            return
+
+        # Number of concurrent sends (for NIC contention)
+        num_concurrent = len(tasks)
+
+        for task in tasks:
+            receiver = self.topology.get_node(task.receiver_id)
+            if receiver.has_seen_block(block_hash):
                 continue
 
-            # Compute propagation delay: geographic latency + transmission time
-            # This is where bandwidth contention manifests: larger blocks
-            # take longer to transmit, especially over slow links
-            delay_ms = self.topology.compute_propagation_delay(
-                sender, peer, block.size_bytes
+            # Geographic latency
+            geo_latency = self.topology.sample_latency(
+                sender.config.region, receiver.config.region
             )
 
+            # Transmission time with NIC contention
+            if self.nic_contention_enabled:
+                # Upload bandwidth is shared across all concurrent sends
+                per_peer_bw = sender.config.upload_bandwidth_mbps / num_concurrent
+            else:
+                # Legacy: each send gets full bandwidth
+                per_peer_bw = sender.config.upload_bandwidth_mbps
+
+            # Bottleneck bandwidth (min of sender upload share, receiver download)
+            effective_bw = min(per_peer_bw, receiver.config.download_bandwidth_mbps)
+
+            if effective_bw <= 0:
+                continue
+
+            size_megabits = (task.size_bytes * 8) / 1_000_000
+            tx_time_ms = (size_megabits / effective_bw) * 1000
+
+            delay_ms = geo_latency + tx_time_ms
             receive_time = self.state.current_time_ms + delay_ms
 
             self.state.schedule_event(
@@ -299,7 +351,7 @@ class DESEngine:
                 event_type=EventType.BLOCK_RECEIVED,
                 payload={
                     "block_hash": block_hash,
-                    "receiver_id": peer.node_id,
+                    "receiver_id": task.receiver_id,
                     "sender_id": sender_id,
                 },
             )
@@ -378,37 +430,36 @@ class DESEngine:
     def _create_block(self, proposer: Node) -> Block:
         """Create a block filled with transactions.
 
-        CAPACITY MODEL NOTE:
-            For Solana, block_size_limit is in bytes and tx_size is in bytes —
-            the division is physically correct.
+        CAPACITY MODEL:
+            Each chain uses its native capacity unit for block-filling:
+            - Solana: bytes (block_size_limit = 6 MB)
+            - Bitcoin: weight units (4 MWU with SegWit witness discount)
+            - Ethereum: gas (30M gas limit)
 
-            For Bitcoin (weight units) and Ethereum (gas), the engine treats
-            block_size_limit and base_tx_overhead as generic "capacity units" and
-            computes max_txs = capacity // per_tx_cost.  This is a deliberate
-            simplification: the DES engine's purpose is to study PROPAGATION
-            effects (bandwidth × block_bytes), not to replicate the exact
-            Bitcoin/Ethereum transaction selection algorithm.  The static
-            block-space analysis in `blockchain/chain_models.py` uses the
-            precise per-chain formulas (SegWit weight, EVM gas) for throughput
-            figures shown in the UI.
+            For PROPAGATION, we compute the actual byte size separately
+            using propagation_tx_overhead_bytes. This ensures propagation
+            delays reflect real network load, not gas/weight abstractions.
         """
         from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
 
-        # Calculate transaction size with current signature algorithm
         sig_size = SIGNATURE_SIZES.get(self.config.signature_algorithm, 64)
         pk_size = PUBLIC_KEY_SIZES.get(self.config.signature_algorithm, 32)
-        tx_overhead = self.chain_config.base_tx_overhead
-        tx_size = tx_overhead + sig_size + pk_size
 
-        # Fill block to capacity
-        max_txs = self.block_size_limit // tx_size
-        # No artificial cap — let Ed25519 fill to true 6 MB capacity
-        # (was previously capped at 10,000 which under-filled small-sig blocks)
+        # --- Capacity calculation (chain-native units) ---
+        tx_overhead = self.chain_config.base_tx_overhead
+        tx_capacity_cost = tx_overhead + sig_size + pk_size
+        max_txs = self.block_size_limit // tx_capacity_cost
+
+        # --- Propagation size (actual bytes on the wire) ---
+        prop_overhead = self.chain_config.propagation_tx_overhead_bytes
+        if prop_overhead == 0:
+            prop_overhead = tx_overhead  # Fallback: same as capacity overhead
+        tx_prop_bytes = prop_overhead + sig_size + pk_size
 
         transactions = [
             Transaction(
                 tx_id=f"tx_{self.state.chain_height + 1}_{i}",
-                size_bytes=tx_size,
+                size_bytes=tx_prop_bytes,  # Actual bytes for propagation
                 signature_algorithm=self.config.signature_algorithm,
                 num_signatures=1,
                 fee_satoshis=self.rng.randint(100, 10000),
@@ -430,7 +481,11 @@ class DESEngine:
         return block
 
     def _select_gossip_peers(self, sender: Node, block: Block) -> List[Node]:
-        """Select peers for gossip propagation.
+        """Select peers for gossip propagation (legacy fallback).
+
+        NOTE: The primary propagation path now uses self.routing.plan_propagation()
+        in _handle_block_propagated(). This method is kept for backward
+        compatibility with Phase2Engine monkey-patches and tests.
 
         Excludes nodes that have already seen the block.
         Uses random selection with configured fanout.

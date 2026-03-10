@@ -33,6 +33,15 @@ class ChainConfig:
     # Calibration target: expected stale/skip rate with classical sigs
     baseline_stale_rate: float
 
+    # Propagation: actual byte-level tx overhead for network transmission.
+    # For Solana/Bitcoin this equals base_tx_overhead. For Ethereum,
+    # base_tx_overhead is gas-denominated (21000) while propagation uses
+    # actual bytes (~120).
+    propagation_tx_overhead_bytes: int = 0  # 0 = use base_tx_overhead
+
+    # Routing strategy identifier
+    routing_strategy: str = "gossip"  # "gossip", "turbine", "compact_block", "eth_hybrid"
+
 
 # Chain-specific configurations
 # Sources:
@@ -50,26 +59,32 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
         target_validators=1500,       # Mainnet validator count
         gossip_fanout=200,            # Turbine fanout (high for speed)
         baseline_stale_rate=0.05,     # ~5% slot skip rate
+        propagation_tx_overhead_bytes=250,  # Same as base_tx_overhead (bytes)
+        routing_strategy="turbine",
     ),
     "bitcoin": ChainConfig(
         name="Bitcoin",
         block_time_ms=600_000,        # 10 minutes
         block_size_limit=4_000_000,   # 4 MWU (weight units)
-        base_tx_overhead=180,         # Version, locktime, inputs/outputs
+        base_tx_overhead=180,         # Version, locktime, inputs/outputs (weight units basis)
         baseline_algorithm="ECDSA",
         target_validators=15000,      # Full nodes (no PoS validators)
         gossip_fanout=8,              # Conservative gossip
         baseline_stale_rate=0.005,    # <1% orphan rate
+        propagation_tx_overhead_bytes=180,  # Actual byte overhead for propagation
+        routing_strategy="compact_block",
     ),
     "ethereum": ChainConfig(
         name="Ethereum",
         block_time_ms=12_000,         # 12 seconds
         block_size_limit=30_000_000,  # 30M gas (2024 baseline)
-        base_tx_overhead=21000,       # Base gas (not bytes, but using for consistency)
+        base_tx_overhead=21000,       # Base gas cost per tx (gas units, NOT bytes)
         baseline_algorithm="ECDSA",
         target_validators=800000,     # Active validators in PoS
         gossip_fanout=16,             # Moderate gossip
         baseline_stale_rate=0.015,    # ~1.5% missed slots
+        propagation_tx_overhead_bytes=120,  # Actual byte overhead (to, value, nonce, etc.)
+        routing_strategy="eth_hybrid",
     ),
 }
 

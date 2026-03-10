@@ -67,6 +67,10 @@ class Phase2Config:
     block_time_ms: Optional[float] = None
     block_size_limit_bytes: Optional[int] = None
 
+    # Realism flags (Phase B upgrades)
+    nic_contention_enabled: bool = True
+    use_chain_routing: bool = True
+
 
 class Phase2Engine:
     """Phase 2/3 Simulation Engine with heterogeneous PQC transactions.
@@ -97,6 +101,8 @@ class Phase2Engine:
             random_seed=config.random_seed,
             block_time_ms=config.block_time_ms,
             block_size_limit_bytes=config.block_size_limit_bytes,
+            nic_contention_enabled=config.nic_contention_enabled,
+            use_chain_routing=config.use_chain_routing,
         )
 
         # Construct the Phase 1 engine (network, topology, state)
@@ -204,9 +210,15 @@ class Phase2Engine:
 
         Fills the mempool with transactions, each with a randomly sampled
         signature algorithm according to the AlgorithmMix distribution.
+
+        Transaction sizes use propagation_tx_overhead_bytes (actual bytes)
+        rather than gas/weight units, ensuring propagation delays are correct.
         """
         elapsed_ms = 0.0
-        base_overhead = self._engine.chain_config.base_tx_overhead
+        # Use propagation overhead for actual byte sizes
+        prop_overhead = self._engine.chain_config.propagation_tx_overhead_bytes
+        if prop_overhead == 0:
+            prop_overhead = self._engine.chain_config.base_tx_overhead
 
         while elapsed_ms < interval_ms:
             inter_arrival = self._arrival_model.next_inter_arrival_ms()
@@ -216,7 +228,7 @@ class Phase2Engine:
 
             # Sample algorithm for this transaction
             algo = self._algo_mix.sample()
-            tx_size = self._algo_mix.tx_size_bytes(algo, base_overhead)
+            tx_size = self._algo_mix.tx_size_bytes(algo, prop_overhead)
 
             tx = Transaction(
                 tx_id=f"tx_{self._total_tx_generated}",
