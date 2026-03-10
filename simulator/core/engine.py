@@ -41,6 +41,8 @@ from simulator.network.routing import (
     get_routing_strategy,
 )
 from simulator.chains.base import get_chain_config, ChainConfig
+from simulator.chains.bitcoin_specific import BitcoinTxModel, DEFAULT_BITCOIN_TX_MODEL
+from simulator.chains.ethereum_specific import EthereumTxModel, DEFAULT_ETHEREUM_TX_MODEL
 from simulator.models.bandwidth import (
     sample_validator_config,
     sample_full_node_config,
@@ -437,24 +439,42 @@ class DESEngine:
             - Ethereum: gas (30M gas limit)
 
             For PROPAGATION, we compute the actual byte size separately
-            using propagation_tx_overhead_bytes. This ensures propagation
+            using chain-specific models. This ensures propagation
             delays reflect real network load, not gas/weight abstractions.
+
+        Phase G upgrade: Uses BitcoinTxModel (SegWit weight) and
+        EthereumTxModel (gas metering) for accurate capacity calculation.
         """
         from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
 
         sig_size = SIGNATURE_SIZES.get(self.config.signature_algorithm, 64)
         pk_size = PUBLIC_KEY_SIZES.get(self.config.signature_algorithm, 32)
 
-        # --- Capacity calculation (chain-native units) ---
-        tx_overhead = self.chain_config.base_tx_overhead
-        tx_capacity_cost = tx_overhead + sig_size + pk_size
-        max_txs = self.block_size_limit // tx_capacity_cost
+        chain = self.config.chain.lower()
 
-        # --- Propagation size (actual bytes on the wire) ---
-        prop_overhead = self.chain_config.propagation_tx_overhead_bytes
-        if prop_overhead == 0:
-            prop_overhead = tx_overhead  # Fallback: same as capacity overhead
-        tx_prop_bytes = prop_overhead + sig_size + pk_size
+        if chain == "bitcoin":
+            # Bitcoin: capacity in weight units, propagation in bytes
+            btc_model = DEFAULT_BITCOIN_TX_MODEL
+            tx_weight = btc_model.tx_weight(sig_size, pk_size)
+            max_txs = self.block_size_limit // tx_weight if tx_weight > 0 else 0
+            tx_prop_bytes = btc_model.tx_bytes(sig_size, pk_size)
+
+        elif chain == "ethereum":
+            # Ethereum: capacity in gas, propagation in bytes
+            eth_model = DEFAULT_ETHEREUM_TX_MODEL
+            tx_gas = eth_model.tx_gas(sig_size, pk_size)
+            max_txs = self.block_size_limit // tx_gas if tx_gas > 0 else 0
+            tx_prop_bytes = eth_model.tx_bytes(sig_size, pk_size)
+
+        else:
+            # Solana (and fallback): capacity and propagation both in bytes
+            tx_overhead = self.chain_config.base_tx_overhead
+            tx_capacity_cost = tx_overhead + sig_size + pk_size
+            max_txs = self.block_size_limit // tx_capacity_cost if tx_capacity_cost > 0 else 0
+            prop_overhead = self.chain_config.propagation_tx_overhead_bytes
+            if prop_overhead == 0:
+                prop_overhead = tx_overhead
+            tx_prop_bytes = prop_overhead + sig_size + pk_size
 
         transactions = [
             Transaction(

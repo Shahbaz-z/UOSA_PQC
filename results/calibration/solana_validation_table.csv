@@ -1,0 +1,5 @@
+Metric,Simulated (baseline),Mainnet Observed,Gap,Gap (%),Direction,Model Omission
+Skip/Stale Rate,0.5385,0.05,0.4885,+976.9%,Pessimistic,Model may over-model contention effects
+P90 Propagation (ms),653.8601,600.0,53.8601,+9.0%,Pessimistic,Possible NIC over-contention in model
+Effective TPS,1623.0,3000.0,-1377.0,-45.9%,Pessimistic,Full blocks assumed; real blocks vary in utilization
+Block Time (ms),400,400.0,0.0,+0.0%,Matched,"Block time is a model input, not output"

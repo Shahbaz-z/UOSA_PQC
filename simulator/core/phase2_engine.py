@@ -33,6 +33,13 @@ from simulator.network.propagation import Block, Transaction
 from simulator.mempool import PoissonArrivalModel
 from simulator.mempool.mempool import GlobalMempool
 from simulator.mempool.algorithm_mix import AlgorithmMixGenerator, AlgorithmMixConfig
+from simulator.economics.fee_market import (
+    DynamicFeeMarket,
+    FeeMarketConfig,
+    FEE_MARKET_PRESETS,
+)
+from simulator.chains.bitcoin_specific import DEFAULT_BITCOIN_TX_MODEL
+from simulator.chains.ethereum_specific import DEFAULT_ETHEREUM_TX_MODEL
 from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
 from blockchain.verification import VERIFICATION_PROFILES
 
@@ -70,6 +77,13 @@ class Phase2Config:
     # Realism flags (Phase B upgrades)
     nic_contention_enabled: bool = True
     use_chain_routing: bool = True
+
+    # Phase G: Fee market
+    fee_market_enabled: bool = False
+    fee_market_config: Optional[FeeMarketConfig] = None  # None = use chain preset
+
+    # Phase G: Vote transaction overhead (Solana-specific)
+    vote_tx_fraction: float = 0.0  # Fraction of block space reserved for votes
 
 
 class Phase2Engine:
@@ -128,10 +142,25 @@ class Phase2Engine:
             rng=random.Random(config.random_seed + 2),
         )
 
+        # Phase G: Fee market
+        self._fee_market: Optional[DynamicFeeMarket] = None
+        if config.fee_market_enabled:
+            fm_config = config.fee_market_config or FEE_MARKET_PRESETS.get(
+                config.chain, FeeMarketConfig()
+            )
+            self._fee_market = DynamicFeeMarket(
+                fm_config, rng=random.Random(config.random_seed + 3)
+            )
+
+        # Phase G: Vote tracking
+        self._vote_txs_generated: int = 0
+        self._vote_bytes_total: int = 0
+
         # Metrics accumulators
         self._blocks_produced: List[Block] = []
         self._total_evictions: int = 0
         self._total_tx_generated: int = 0
+        self._economic_rejections: int = 0
         self._verification_times_ms: List[float] = []
 
     def run(self) -> Dict:
@@ -194,6 +223,15 @@ class Phase2Engine:
             self._generate_transactions_until(
                 self._engine.block_time_ms
             )
+            # Phase G: Update fee market after each block
+            if self._fee_market is not None:
+                mempool_util = self._mempool.utilization
+                block_util = 1.0  # Assume full blocks for now
+                self._fee_market.update_base_fee(
+                    current_time_ms=self._engine.state.current_time_ms,
+                    mempool_utilization=mempool_util,
+                    block_utilization=block_util,
+                )
             original_handle_slot(event)
 
         self._engine._handle_slot_tick = patched_handle_slot  # type: ignore
@@ -211,14 +249,16 @@ class Phase2Engine:
         Fills the mempool with transactions, each with a randomly sampled
         signature algorithm according to the AlgorithmMix distribution.
 
-        Transaction sizes use propagation_tx_overhead_bytes (actual bytes)
-        rather than gas/weight units, ensuring propagation delays are correct.
+        Transaction sizes use chain-specific models (Phase G) for accurate
+        byte sizing. Fee market integration assigns realistic fees and
+        tracks economic failures.
+
+        Phase G additions:
+        - Dynamic fee market: fee assignment and economic rejection
+        - Vote transaction injection (Solana-specific)
         """
         elapsed_ms = 0.0
-        # Use propagation overhead for actual byte sizes
-        prop_overhead = self._engine.chain_config.propagation_tx_overhead_bytes
-        if prop_overhead == 0:
-            prop_overhead = self._engine.chain_config.base_tx_overhead
+        chain = self.config.chain.lower()
 
         while elapsed_ms < interval_ms:
             inter_arrival = self._arrival_model.next_inter_arrival_ms()
@@ -228,30 +268,97 @@ class Phase2Engine:
 
             # Sample algorithm for this transaction
             algo = self._algo_mix.sample()
-            tx_size = self._algo_mix.tx_size_bytes(algo, prop_overhead)
+            is_pqc = algo not in ("Ed25519", "ECDSA")
+
+            # Chain-specific byte sizing for propagation
+            sig_size = SIGNATURE_SIZES.get(algo, 64)
+            pk_size = PUBLIC_KEY_SIZES.get(algo, 32)
+
+            if chain == "bitcoin":
+                tx_size = DEFAULT_BITCOIN_TX_MODEL.tx_bytes(sig_size, pk_size)
+            elif chain == "ethereum":
+                tx_size = DEFAULT_ETHEREUM_TX_MODEL.tx_bytes(sig_size, pk_size)
+            else:
+                prop_overhead = self._engine.chain_config.propagation_tx_overhead_bytes
+                if prop_overhead == 0:
+                    prop_overhead = self._engine.chain_config.base_tx_overhead
+                tx_size = self._algo_mix.tx_size_bytes(algo, prop_overhead)
+
+            # Fee assignment: use fee market if enabled
+            if self._fee_market is not None:
+                fee = self._fee_market.generate_tx_fee(tx_size, is_pqc=is_pqc)
+            else:
+                fee = self.rng.randint(100, 50_000)
 
             tx = Transaction(
                 tx_id=f"tx_{self._total_tx_generated}",
                 size_bytes=tx_size,
                 signature_algorithm=algo,
                 num_signatures=1,
-                fee_satoshis=self.rng.randint(100, 50_000),
+                fee_satoshis=fee,
                 arrival_time_ms=self._engine.state.current_time_ms + elapsed_ms,
             )
+
+            # Economic failure check
+            if self._fee_market is not None:
+                if not self._fee_market.check_acceptable(fee, tx_size):
+                    self._economic_rejections += 1
+                    self._total_tx_generated += 1
+                    continue  # Transaction rejected — economic failure
 
             accepted, evicted = self._mempool.add_transaction(tx)
             self._total_evictions += len(evicted)
             self._total_tx_generated += 1
 
+        # Phase G: Inject vote transactions (Solana only)
+        if chain == "solana" and self.config.vote_tx_fraction > 0:
+            self._inject_vote_transactions(interval_ms)
+
+    def _inject_vote_transactions(self, interval_ms: float) -> None:
+        """Inject vote transactions into the mempool (Solana-specific).
+
+        Solana validators submit vote transactions every slot (~400ms).
+        These consume block space and bandwidth but always use Ed25519
+        (system program doesn't change during PQC transition).
+
+        Vote transactions:
+        - Size: ~1,232 bytes (compressed Solana vote)
+        - Algorithm: Ed25519 (always classical)
+        - Priority: Very high (must be included)
+        """
+        VOTE_TX_SIZE = 1232  # Compressed vote tx
+        VOTE_FEE = 100_000  # High priority — votes must be included
+
+        # Number of vote txs per interval = num_validators * fraction
+        num_votes = int(self.config.num_validators * self.config.vote_tx_fraction)
+
+        for i in range(num_votes):
+            tx = Transaction(
+                tx_id=f"vote_{self._vote_txs_generated}",
+                size_bytes=VOTE_TX_SIZE,
+                signature_algorithm="Ed25519",  # Votes always use classical sigs
+                num_signatures=1,
+                fee_satoshis=VOTE_FEE,
+                arrival_time_ms=self._engine.state.current_time_ms,
+            )
+            accepted, evicted = self._mempool.add_transaction(tx)
+            self._total_evictions += len(evicted)
+            self._vote_txs_generated += 1
+            self._vote_bytes_total += VOTE_TX_SIZE
+
     def _create_heterogeneous_block(self, proposer: Node) -> Block:
         """Create a block from mempool with heterogeneous signatures.
 
         Pulls the highest-fee-rate transactions from the mempool up to
-        the block size limit. This replaces the Phase 1 uniform-fill logic.
+        the block size limit. Uses chain-specific capacity models.
+
+        Phase G: Bitcoin uses weight units, Ethereum uses gas.
         """
+        chain = self.config.chain.lower()
         max_block_size = self._engine.block_size_limit
-        # No artificial tx cap — blocks fill to byte-size capacity
-        # (was previously capped at 10,000 which under-filled small-sig blocks)
+
+        # For mempool selection we use byte size (propagation size)
+        # The capacity constraint is chain-specific but mempool stores byte-sized txs
         max_txs = max_block_size  # effectively unlimited; byte budget is the real constraint
 
         # Select transactions from mempool
@@ -422,4 +529,75 @@ class Phase2Engine:
             # Algorithm distribution in blocks
             "algo_distribution": algo_fractions,
             "algo_counts": algo_distribution,
+
+            # Phase G: Fee market metrics
+            **self._compute_fee_market_metrics(),
+
+            # Phase G: Vote overhead metrics
+            **self._compute_vote_metrics(),
+        }
+
+    def _compute_fee_market_metrics(self) -> Dict:
+        """Compute fee market metrics for results."""
+        if self._fee_market is None:
+            return {
+                "fee_market_enabled": False,
+                "economic_failure_count": 0,
+                "economic_failure_rate": 0.0,
+            }
+
+        fm_metrics = self._fee_market.metrics()
+        fm_metrics["economic_failure_count"] = self._economic_rejections
+        fm_metrics["economic_failure_rate"] = (
+            self._economic_rejections / self._total_tx_generated
+            if self._total_tx_generated > 0
+            else 0.0
+        )
+        return fm_metrics
+
+    def _compute_vote_metrics(self) -> Dict:
+        """Compute vote transaction overhead metrics."""
+        num_blocks = len(self._blocks_produced)
+        if num_blocks == 0:
+            return {
+                "vote_tx_fraction_config": self.config.vote_tx_fraction,
+                "vote_tx_count_total": 0,
+                "vote_tx_count_per_block": 0.0,
+                "vote_overhead_bytes_total": 0,
+                "vote_overhead_bytes_per_block": 0.0,
+                "vote_overhead_fraction": 0.0,
+                "effective_user_tps": 0.0,
+            }
+
+        # Count vote txs in produced blocks
+        vote_txs_in_blocks = 0
+        vote_bytes_in_blocks = 0
+        user_txs_in_blocks = 0
+        for block in self._blocks_produced:
+            for tx in block.transactions:
+                if tx.tx_id.startswith("vote_"):
+                    vote_txs_in_blocks += 1
+                    vote_bytes_in_blocks += tx.size_bytes
+                else:
+                    user_txs_in_blocks += 1
+
+        total_block_bytes = sum(b.size_bytes for b in self._blocks_produced)
+        sim_duration_s = self.config.simulation_duration_ms / 1000.0
+
+        return {
+            "vote_tx_fraction_config": self.config.vote_tx_fraction,
+            "vote_tx_count_total": vote_txs_in_blocks,
+            "vote_tx_count_per_block": round(vote_txs_in_blocks / num_blocks, 2),
+            "vote_overhead_bytes_total": vote_bytes_in_blocks,
+            "vote_overhead_bytes_per_block": round(vote_bytes_in_blocks / num_blocks, 2),
+            "vote_overhead_fraction": (
+                round(vote_bytes_in_blocks / total_block_bytes, 4)
+                if total_block_bytes > 0
+                else 0.0
+            ),
+            "effective_user_tps": (
+                round(user_txs_in_blocks / sim_duration_s, 2)
+                if sim_duration_s > 0
+                else 0.0
+            ),
         }
