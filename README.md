@@ -1,148 +1,250 @@
 # PQC Cross-Chain Simulator
 
-A discrete-event simulation framework quantifying how post-quantum cryptography (PQC) signatures affect throughput, propagation, and stale rates in real blockchain networks — **Solana**, **Bitcoin**, and **Ethereum**.
+A research-grade simulation and analysis framework quantifying how post-quantum cryptography (PQC) affects throughput, propagation, fees, and consensus across **Solana**, **Bitcoin**, and **Ethereum**.
+
+> **Branch `research-v2`** — 425 tests passing, 2,800+ lines of new analysis code.
+
+---
 
 ## What This Project Does
 
-Blockchains rely on digital signatures (Ed25519, ECDSA, Schnorr) that are vulnerable to quantum computers via Shor's algorithm. NIST-standardised PQC replacements (FIPS 204/205) are **10–267× larger** and verification is **3–100× slower**, directly reducing throughput. This simulator models that impact using:
+Blockchains rely on digital signatures (Ed25519, ECDSA, BLS) that are vulnerable to quantum computers via Shor's algorithm. NIST-standardised PQC replacements (FIPS 204/205) are **10–460× larger** and verification is **3–100× slower**. This project quantifies the impact using three complementary approaches:
 
-1. **Static block-space analysis** — Per-chain throughput retention under each PQC algorithm, accounting for chain-specific structures (Solana vote overhead, Bitcoin SegWit discount, Ethereum gas costing).
-2. **Monte Carlo DES simulation** — A 75-node network (50 validators + 25 full nodes) with Poisson transaction arrivals, bounded mempool with fee-rate eviction, heterogeneous signature blocks, and per-transaction verification timing. Sweeps across 0–100% PQC adoption (21 levels × 10 seeds = 210 runs).
-3. **Sensitivity analysis** — Additional 420 runs testing Falcon-dominant and ML-DSA-only algorithm mixes to quantify the impact of the signature composition.
+### 1. Solana DES Simulation (High-Throughput Model)
 
-### Key Finding
+A 75-node discrete-event simulation with realistic network conditions, sweeping PQC adoption from 0–100%. This is the right methodology for Solana because the bottleneck is **NIC contention and slot timing** at 400ms block intervals.
 
-At ~37% PQC adoption (default 30/50/20 mix of ML-DSA-44/ML-DSA-65/SLH-DSA-128f), the network crosses a catastrophic threshold: mean stale rate exceeds 30%, block sizes reach 10.4× baseline, and propagation P90 consumes 95% of the 400 ms slot. The bottleneck is **bandwidth (block bloat), not compute (verification time)** — verification uses only ~16% of the slot even at 100% PQC.
+- NIC contention: upload bandwidth shared across concurrent gossip peers
+- Turbine routing: Solana's layered tree propagation (fanout=200)
+- Vote transaction overhead: validators submit ~1 vote tx per slot
+- Dynamic fee market: priority-fee model with economic failure tracking
+- Validator economics: break-even stale rate, exit probability, network shrinkage
+- Mainnet calibration: validated against observed Solana metrics (skip rate, P90 propagation, TPS)
+- Statistical hardening: multi-seed sweeps with confidence intervals and bootstrap thresholds
 
-### UI Tabs
+### 2. Bitcoin & Ethereum Analytical Models (Capacity-Constrained Chains)
 
-- **Overview** — Cross-chain throughput retention heatmap, per-chain summaries, quantum threat context
-- **Algorithms** — Side-by-side keygen/sign/verify comparison across all algorithms
-- **Block Space** — Per-chain throughput impact with adjustable parameters (Solana vote overhead, Bitcoin SegWit discount, Ethereum gas limits)
-- **PQC Shock Simulator** — Monte Carlo sweep visualisation: Death Curve (stale rate), Block Bloat, False Bottleneck (verification), cross-chain extrapolation
+For Bitcoin and Ethereum, the bottleneck is **block capacity** (weight units, gas), not NIC contention. Integration-percentage sweeps don't capture the right dynamics. Instead, these analytical models compute exact capacity/fee/consensus impacts per PQC algorithm:
+
+**Bitcoin:**
+- Block weight analysis across 7 PQC algorithms under 3 witness discount policies
+- Fee market simulation: greedy block construction from mixed mempools
+- Result: FALCON-512 reduces capacity 77%; Dilithium5 by 94%; SPHINCS+-256s by 99%
+
+**Ethereum:**
+- Gas cost analysis: per-algorithm TPS for simple, ERC-20, and complex transactions
+- EIP-1559 base fee dynamics with demand elasticity
+- Consensus layer: attestation sizes without BLS aggregation, P2P bandwidth requirements
+- Validator economics: bandwidth/storage overhead, centralisation risk
+- Result: Only FALCON-512/1024 are consensus-feasible at 100 Mbps; Dilithium2+ exceeds validator bandwidth
+
+### 3. Migration Transition Model
+
+Sweeps PQC adoption from 0→100% on both chains to identify critical thresholds during the transition period where legacy and PQC signatures coexist.
+
+| Chain | Algorithm | 50% TPS Drop | Gas Limit Increase | Consensus Feasible |
+|-------|-----------|-------------|--------------------|--------------------|
+| Bitcoin | FALCON-512 | 35% adoption | — | — |
+| Bitcoin | Dilithium3 | 10% adoption | — | — |
+| Bitcoin | SPHINCS+-256s | 5% adoption | — | — |
+| Ethereum | FALCON-512 | — | 50% adoption | Yes |
+| Ethereum | Dilithium2 | — | 25% adoption | No |
+| Ethereum | SPHINCS+-256s | — | 5% adoption | No |
+
+---
 
 ## Quick Start
 
-### With Docker (recommended)
+### Running the Chain Analysis (No Dependencies)
+
+The Bitcoin/Ethereum analytical models require no external dependencies beyond Python 3.10+:
 
 ```bash
-docker compose up --build
-# Open http://localhost:8501
+# Full analysis — all chains, all algorithms (~10 seconds)
+python run_chain_analysis.py --chain all
+
+# Bitcoin only
+python run_chain_analysis.py --chain btc
+
+# Ethereum only
+python run_chain_analysis.py --chain eth
+
+# Filter by algorithm family
+python run_chain_analysis.py --algorithms falcon
+python run_chain_analysis.py --algorithms dilithium
+python run_chain_analysis.py --algorithms sphincs
 ```
 
-### Mock mode (no liboqs needed)
+Output goes to `results/bitcoin/`, `results/ethereum/`, `results/migration/`, and `results/summary_tables.md`.
+
+### Running the Solana Sweep
 
 ```bash
-docker compose --profile mock up --build
-# Open http://localhost:8502
+# Quick mode (5 seeds, ~3 min)
+MOCK_PQC=1 python run_enhanced_sweep.py --chain solana --quick
+
+# Full publication sweep (30 seeds, ~hours)
+MOCK_PQC=1 python run_enhanced_sweep.py --chain solana
 ```
 
-### Local development
+### Running the Original Monte Carlo Sweep
 
 ```bash
+MOCK_PQC=1 python run_experiments.py
+```
+
+### Running the Streamlit UI
+
+```bash
+# Docker (recommended)
+docker compose up --build         # http://localhost:8501
+
+# Local
 pip install -r requirements.txt
-
-# Run the Monte Carlo sweep first (generates results/pqc_sweep.csv):
-python run_experiments.py
-
-# Then launch the UI:
 PQC_MOCK=1 streamlit run app/pqc_demo_streamlit.py
 ```
+
+---
 
 ## Running Tests
 
 ```bash
-# Mock mode (always works, no liboqs required)
-PQC_MOCK=1 pytest tests/ -v
+# All 425 tests (mock mode, no liboqs required)
+MOCK_PQC=1 pytest tests/ -v \
+  --ignore=tests/test_kem.py \
+  --ignore=tests/test_signatures.py \
+  --ignore=tests/test_aggregation.py \
+  --ignore=tests/test_ui_integration.py \
+  --ignore=tests/test_charts.py
 
-# With liboqs
+# Chain analysis tests only (75 tests)
+MOCK_PQC=1 pytest tests/test_chain_analysis/ -v
+
+# Phase B tests (NIC contention, routing)
+MOCK_PQC=1 pytest tests/test_phase_b/ -v
+
+# Phase G tests (fee market, validator economics, calibration)
+MOCK_PQC=1 pytest tests/test_phase_g/ -v
+
+# With liboqs (includes KEM, signature, aggregation tests)
 pytest tests/ -v
 ```
 
-## Running Benchmarks (CLI)
+---
 
-```bash
-python -m benchmarks.bench
-# Results written to benchmarks/results/benchmark_results.csv
-```
+## Key Results
 
-## Running Sensitivity Sweeps
+### Bitcoin: Block Capacity Under PQC
 
-```bash
-python run_sensitivity_sweeps.py            # Both Falcon-dominant + ML-DSA-only
-python run_sensitivity_sweeps.py --sweep falcon      # Falcon-dominant only
-python run_sensitivity_sweeps.py --sweep mldsa_only  # ML-DSA-only only
-python analyze_sensitivity.py               # Compare all three mixes
-```
+| Algorithm | Sig (B) | PK (B) | Txs/Block | TPS | Reduction |
+|-----------|---------|--------|-----------|-----|-----------|
+| ECDSA (baseline) | 72 | 33 | 4,683 | 7.80 | — |
+| FALCON-512 | 666 | 897 | 1,061 | 1.77 | 77% |
+| Dilithium2 | 2,420 | 1,312 | 493 | 0.82 | 89% |
+| Dilithium5 | 4,595 | 2,592 | 266 | 0.44 | 94% |
+| SPHINCS+-256s | 29,792 | 64 | 66 | 0.11 | 99% |
+
+### Ethereum: Gas Cost Impact
+
+| Algorithm | Simple TPS | ERC-20 TPS | Reduction | Consensus Feasible |
+|-----------|-----------|------------|-----------|-------------------|
+| ECDSA (baseline) | 97.5 | 35.8 | — | Yes (BLS) |
+| FALCON-512 | 45.3 | 25.2 | 54% | Yes |
+| Dilithium2 | 26.7 | 18.2 | 73% | No |
+| SPHINCS+-256s | 3.2 | 3.0 | 97% | No |
+
+### Solana: DES Simulation (50% PQC, Enhanced Sweep)
+
+| Metric | Value |
+|--------|-------|
+| Stale rate | 54% |
+| P90 propagation | 654 ms |
+| Economic failure rate | 28.6% |
+| Vote overhead | 0.45% |
+| Break-even stale rate | 83.5% |
+
+---
 
 ## Project Structure
 
 ```
-simulator/                  Discrete-event simulation engine
+simulator/                     Discrete-event simulation engine
   core/
-    engine.py               Phase 1 DES engine (propagation model)
-    phase2_engine.py        Phase 2/3 engine (Poisson arrivals, mempool, heterogeneous blocks)
-    events.py               Event types and priority ordering
+    engine.py                  DES engine with NIC contention + chain-specific capacity
+    phase2_engine.py           Phase 2/3: Poisson arrivals, mempool, fee market, vote overhead
+    events.py                  Event types and priority ordering
   network/
-    node.py                 Node model with CPU scheduling (analytical min-heap)
-    topology.py             Network topology with geographic latency matrix
-    propagation.py          Block and Transaction dataclasses, percentile computation
+    node.py                    Node model with CPU scheduling + NIC bandwidth sharing
+    topology.py                Network topology with geographic latency matrix
+    propagation.py             Block/Transaction dataclasses, percentile computation
+    routing.py                 Chain-specific routing (Turbine, CompactBlock, EthHybrid)
   mempool/
-    mempool.py              Bounded mempool with fee-rate eviction
-    algorithm_mix.py        PQC/classical algorithm sampling + Poisson arrival model
-  models/
-    bandwidth.py            Validator/full-node hardware tier sampling
-    latency.py              Latency model (distance-dependent, used in tests)
+    mempool.py                 Bounded mempool with fee-rate eviction
+    algorithm_mix.py           PQC/classical algorithm sampling + Poisson arrival model
   chains/
-    base.py                 Chain configurations (Solana, Bitcoin, Ethereum)
+    base.py                    Chain configurations (Solana, Bitcoin, Ethereum)
+    bitcoin_specific.py        UTXO tx model with SegWit witness discount
+    ethereum_specific.py       Account model with gas metering
+  economics/
+    fee_market.py              Dynamic fee markets (EIP-1559, first-price, priority fee)
+    validator_economics.py     Break-even analysis, exit probability, network shrinkage
   calibration/
-    runner.py               Calibration runner (utility, not in main pipeline)
-    targets.py              Calibration targets and AWS Cloudping reference data
-  state.py                  Simulation state (event queue, block registry)
-  results.py                Result dataclasses
+    mainnet_data.py            Hardcoded mainnet observations (Solana/ETH/BTC)
+    validation.py              Validation table + gap analysis generation
+  models/
+    bandwidth.py               Validator/full-node hardware tier sampling
+    latency.py                 Latency model (distance-dependent)
+  results.py                   Result dataclasses
+  state.py                     Simulation state (event queue, block registry)
 
-blockchain/                 Blockchain impact modelling
-  chain_models.py           Solana, Bitcoin, Ethereum block-space analysis
-  verification.py           Signature verification time profiles
-  aggregation.py            Signature aggregation scheme models (BLS, Falcon tree, ML-DSA batch)
+analysis/                      Analytical models (not simulation-based)
+  pqc_algorithms.py            Algorithm catalogue: sizes, gas estimates, security levels
+  bitcoin_pqc_analysis.py      Block weight, witness policies, fee market simulation
+  ethereum_pqc_analysis.py     Gas costs, EIP-1559 dynamics, consensus layer, validator econ
+  migration_model.py           Transition curves + threshold detection (BTC + ETH)
+  statistical_analysis.py      CIs, bootstrap thresholds, censoring-aware metrics
 
-pqc_lib/                    PQC algorithm wrappers (used by UI and benchmarks, not DES engine)
-  signatures.py             ML-DSA, SLH-DSA, Falcon, Ed25519, ECDSA, Schnorr + hybrids
-  kem.py                    ML-KEM (FIPS 203): keygen, encaps, decaps
-  mock.py                   Deterministic mocks with NIST-accurate artifact sizes
-  utils.py                  Timing and memory profiling utilities
+blockchain/                    Static block-space impact models
+  chain_models.py              Solana, Bitcoin, Ethereum throughput retention
+  verification.py              Signature verification time profiles
+  aggregation.py               Aggregation scheme models (BLS, Falcon tree, ML-DSA batch)
 
-app/                        Streamlit application
-  pqc_demo_streamlit.py     Main orchestrator (sidebar, tabs, chain context)
-  tabs/
-    overview.py             Tab 1: Cross-chain overview with throughput heatmap
-    comparison.py           Tab 2: Side-by-side algorithm comparison
-    block_space.py          Tab 3: Block-space visualiser with adjustable parameters
-    pqc_shock_sim.py        Tab 4: PQC Shock Simulator (Monte Carlo sweep charts)
-  components/
-    charts.py               Reusable Plotly chart builders
-  utils.py                  Shared formatting utilities
+pqc_lib/                       PQC algorithm wrappers
+  signatures.py                ML-DSA, SLH-DSA, Falcon, Ed25519, ECDSA, Schnorr + hybrids
+  kem.py                       ML-KEM (FIPS 203)
+  mock.py                      Deterministic mocks with NIST-accurate artifact sizes
+  utils.py                     Timing and memory profiling utilities
 
-run_experiments.py          Monte Carlo PQC fraction sweep (generates pqc_sweep.csv)
-run_sensitivity_sweeps.py   Sensitivity analysis with alternative algorithm mixes
-analyze_results.py          Summary analysis of sweep results
-analyze_refined.py          Detailed failure-threshold analysis
-analyze_sensitivity.py      Comparative analysis across three algorithm mixes
-generate_pqc_report.py      PDF report generator (21-page academic report)
+app/                           Streamlit UI
+  pqc_demo_streamlit.py        Main orchestrator
+  tabs/                        Overview, Algorithms, Block Space, PQC Shock Simulator
+  components/charts.py         Reusable Plotly chart builders
 
-results/                    Sweep output CSVs
-  pqc_sweep.csv             210 rows: default mix (30% ML-DSA-44, 50% ML-DSA-65, 20% SLH-DSA-128f)
-  sensitivity_falcon.csv    210 rows: Falcon-dominant (70% Falcon-512, 20% ML-DSA-65, 10% SLH-DSA-128f)
-  sensitivity_mldsa_only.csv 210 rows: ML-DSA-only (60% ML-DSA-44, 40% ML-DSA-65)
+run_chain_analysis.py          BTC/ETH analytical runner (deterministic, <10s)
+run_enhanced_sweep.py          Solana publication sweep (30 seeds, fee market, votes, econ)
+run_multi_chain_sweep.py       Multi-chain DES sweep infrastructure
+run_experiments.py             Original Monte Carlo sweep (generates pqc_sweep.csv)
+run_sensitivity_sweeps.py      Sensitivity analysis with alternative algorithm mixes
 
-benchmarks/                 Benchmark harness
-  bench.py                  CLI benchmark runner with CSV export
+results/                       All output data
+  bitcoin/                     Block capacity, witness policy, fee market CSVs
+  ethereum/                    Gas cost, EIP-1559, consensus layer, validator economics CSVs
+  migration/                   Transition curves + threshold summary CSVs
+  calibration/                 Solana validation table + gap analysis
+  summary_tables.md            Publication-ready markdown tables
+  solana_sweep_enhanced.csv    Enhanced Solana sweep (5 seeds × 21 PQC levels)
+  pqc_sweep.csv                Original 210-run sweep
+  sensitivity_falcon.csv       Falcon-dominant sensitivity (210 runs)
+  sensitivity_mldsa_only.csv   ML-DSA-only sensitivity (210 runs)
 
-tests/                      Unit tests (pytest)
-
-.github/workflows/ci.yml   GitHub Actions: test + lint on Python 3.10–3.12
-docs/methodology.md         Methodology documentation
-ASSUMPTIONS_AND_LIMITATIONS.md  All assumptions, simplifications, and known limitations
+tests/                         425 tests (pytest)
+  test_chain_analysis/         75 tests: BTC analysis, ETH analysis, migration model
+  test_phase_b/                NIC contention, routing strategies, multi-chain
+  test_phase_g/                Fee market, validator economics, calibration, votes, stats
+  test_phase2/                 Mempool, Phase 2 engine, Poisson
+  test_simulator/              Engine, latency, topology
+  test_solana_model.py         Solana-specific model tests
+  test_verification.py         Verification timing tests
 ```
 
 ## Signature Algorithms
@@ -151,28 +253,28 @@ ASSUMPTIONS_AND_LIMITATIONS.md  All assumptions, simplifications, and known limi
 |-----------|------|----------|----------|---------|------------|
 | Ed25519 | Classical | RFC 8032 | 64 B | 32 B | N/A |
 | ECDSA | Classical | FIPS 186 | 72 B | 33 B | N/A |
-| Schnorr | Classical | BIP 340 | 64 B | 32 B | N/A |
-| ML-DSA-44 | PQC | FIPS 204 | 2,420 B | 1,312 B | 2 |
-| ML-DSA-65 | PQC | FIPS 204 | 3,309 B | 1,952 B | 3 |
-| ML-DSA-87 | PQC | FIPS 204 | 4,627 B | 2,592 B | 5 |
-| Falcon-512 | PQC | Pending (FN-DSA) | 666 B | 897 B | 1 |
-| Falcon-1024 | PQC | Pending (FN-DSA) | 1,280 B | 1,793 B | 5 |
-| SLH-DSA-128s | PQC | FIPS 205 | 7,856 B | 32 B | 1 |
-| SLH-DSA-128f | PQC | FIPS 205 | 17,088 B | 32 B | 1 |
+| BLS12-381 | Classical | — | 96 B | 48 B | N/A |
+| FALCON-512 | PQC | Pending (FN-DSA) | 666 B | 897 B | 1 |
+| FALCON-1024 | PQC | Pending (FN-DSA) | 1,280 B | 1,793 B | 5 |
+| ML-DSA-44 (Dilithium2) | PQC | FIPS 204 | 2,420 B | 1,312 B | 2 |
+| ML-DSA-65 (Dilithium3) | PQC | FIPS 204 | 3,293 B | 1,952 B | 3 |
+| ML-DSA-87 (Dilithium5) | PQC | FIPS 204 | 4,595 B | 2,592 B | 5 |
+| SLH-DSA-128s (SPHINCS+-128s) | PQC | FIPS 205 | 7,856 B | 32 B | 1 |
+| SLH-DSA-256s (SPHINCS+-256s) | PQC | FIPS 205 | 29,792 B | 64 B | 5 |
 
 ## Blockchain Models
 
-| Chain | Baseline Sig | Block Limit | Block Time | Key Feature |
-|-------|-------------|-------------|------------|-------------|
-| Solana | Ed25519 | ~6 MB | 400 ms | Vote tx overhead (70–80%), gossip propagation |
-| Bitcoin | ECDSA/Schnorr | 4 MWU | 10 min | SegWit witness discount (1/4 weight) |
-| Ethereum | ECDSA | 60M gas (current) | 12 s | Gas-based costing, roadmap targets 100M+ |
+| Chain | Approach | Baseline Sig | Block Limit | Block Time | Key Feature |
+|-------|----------|-------------|-------------|------------|-------------|
+| Solana | DES simulation | Ed25519 | ~6 MB | 400 ms | NIC contention, Turbine routing, vote overhead |
+| Bitcoin | Analytical model | ECDSA/Schnorr | 4 MWU | 10 min | SegWit witness discount, fee market dynamics |
+| Ethereum | Analytical model | ECDSA + BLS | 30M gas | 12 s | Gas costing, EIP-1559, consensus layer impact |
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PQC_MOCK` | `0` | Set to `1` to force mock mode (no liboqs needed) |
+| `MOCK_PQC` / `PQC_MOCK` | `0` | Set to `1` for mock mode (no liboqs needed) |
 
 ## Author
 
