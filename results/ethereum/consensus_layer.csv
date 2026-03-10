@@ -1,0 +1,9 @@
+algorithm,individual_attestation_bytes,committee_attestation_bytes,attestation_multiplier,bandwidth_required_mbps,slot_timing_feasible,beacon_block_overhead_kb
+ECDSA (secp256k1),224,224,1.0,0.03,True,0.0
+FALCON-512,794,406528,1814.86,52.04,True,25394.0
+FALCON-1024,1408,720896,3218.29,92.27,True,45042.0
+Dilithium2 (ML-DSA-44),2548,1304576,5824.0,166.99,False,81522.0
+Dilithium3 (ML-DSA-65),3421,1751552,7819.43,224.2,False,109458.0
+Dilithium5 (ML-DSA-87),4723,2418176,10795.43,309.53,False,151122.0
+SPHINCS+-128s,7984,4087808,18249.14,523.24,False,255474.0
+SPHINCS+-256s,29920,15319040,68388.57,1960.84,False,957426.0

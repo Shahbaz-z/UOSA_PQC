@@ -1,0 +1,15 @@
+chain,algorithm,critical_50pct_tps_threshold,fee_2x_threshold,gas_limit_increase_threshold,consensus_feasibility
+Bitcoin,FALCON-512,35.0,,,
+Bitcoin,FALCON-1024,15.0,,,
+Bitcoin,Dilithium2 (ML-DSA-44),15.0,,,
+Bitcoin,Dilithium3 (ML-DSA-65),10.0,,,
+Bitcoin,Dilithium5 (ML-DSA-87),10.0,,,
+Bitcoin,SPHINCS+-128s,5.0,,,
+Bitcoin,SPHINCS+-256s,5.0,,,
+Ethereum,FALCON-512,,,50.0,True
+Ethereum,FALCON-1024,,,25.0,True
+Ethereum,Dilithium2 (ML-DSA-44),,,25.0,False
+Ethereum,Dilithium3 (ML-DSA-65),,,15.0,False
+Ethereum,Dilithium5 (ML-DSA-87),,,15.0,False
+Ethereum,SPHINCS+-128s,,,10.0,False
+Ethereum,SPHINCS+-256s,,,5.0,False

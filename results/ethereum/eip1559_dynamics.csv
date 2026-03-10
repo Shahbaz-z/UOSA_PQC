@@ -1,0 +1,9 @@
+algorithm,equilibrium_base_fee_gwei,base_fee_multiplier,avg_block_utilization,avg_user_tx_cost_gwei,blocks_over_target
+ECDSA (secp256k1),1.0,1.0,0.1281,25620.0,0
+FALCON-512,1.0,1.0,0.2754,55072.0,0
+FALCON-1024,1.0,1.0,0.4317,86332.0,0
+Dilithium2 (ML-DSA-44),1.0,1.0,0.4674,93480.0,0
+Dilithium3 (ML-DSA-65),37.752,37.752,0.5009,4672786.88,216
+Dilithium5 (ML-DSA-87),58.1231,58.123,0.5027,9688198.12,1000
+SPHINCS+-128s,123.9441,123.944,0.5058,30053976.36,888
+SPHINCS+-256s,19991.5391,19991.539,0.5271,15609233795.68,362

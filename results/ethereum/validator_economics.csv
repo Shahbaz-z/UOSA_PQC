@@ -1,0 +1,9 @@
+algorithm,extra_bandwidth_gb_per_month,extra_storage_gb_per_month,min_bandwidth_requirement_mbps,pct_validators_below_requirement
+ECDSA (secp256k1),0.0,0.0,0.0,0.0
+FALCON-512,10462.01,5231.0,52.04,25.0
+FALCON-1024,18556.73,9278.37,92.27,25.0
+Dilithium2 (ML-DSA-44),33586.03,16793.01,166.99,50.0
+Dilithium3 (ML-DSA-65),45095.31,22547.65,224.2,50.0
+Dilithium5 (ML-DSA-87),62260.35,31130.17,309.53,50.0
+SPHINCS+-128s,105252.04,52626.02,523.24,50.0
+SPHINCS+-256s,394447.36,197223.68,1960.84,50.0

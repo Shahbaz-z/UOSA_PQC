@@ -1,0 +1,25 @@
+algorithm,policy,tx_weight,txs_per_block,effective_tps
+ECDSA (secp256k1),Current SegWit (1x witness),854.0,4683,7.805
+ECDSA (secp256k1),Extended discount (0.5x witness),747.0,5354,8.923
+ECDSA (secp256k1),No discount (4x all),1496.0,2673,4.455
+FALCON-512,Current SegWit (1x witness),3770.0,1061,1.768
+FALCON-512,Extended discount (0.5x witness),2205.0,1814,3.023
+FALCON-512,No discount (4x all),13160.0,303,0.505
+FALCON-1024,Current SegWit (1x witness),6790.0,589,0.982
+FALCON-1024,Extended discount (0.5x witness),3715.0,1076,1.793
+FALCON-1024,No discount (4x all),25240.0,158,0.263
+Dilithium2 (ML-DSA-44),Current SegWit (1x witness),8108.0,493,0.822
+Dilithium2 (ML-DSA-44),Extended discount (0.5x witness),4374.0,914,1.523
+Dilithium2 (ML-DSA-44),No discount (4x all),30512.0,131,0.218
+Dilithium3 (ML-DSA-65),Current SegWit (1x witness),11134.0,359,0.598
+Dilithium3 (ML-DSA-65),Extended discount (0.5x witness),5887.0,679,1.132
+Dilithium3 (ML-DSA-65),No discount (4x all),42616.0,93,0.155
+Dilithium5 (ML-DSA-87),Current SegWit (1x witness),15018.0,266,0.443
+Dilithium5 (ML-DSA-87),Extended discount (0.5x witness),7829.0,510,0.85
+Dilithium5 (ML-DSA-87),No discount (4x all),58152.0,68,0.113
+SPHINCS+-128s,Current SegWit (1x witness),16420.0,243,0.405
+SPHINCS+-128s,Extended discount (0.5x witness),8530.0,468,0.78
+SPHINCS+-128s,No discount (4x all),63760.0,62,0.103
+SPHINCS+-256s,Current SegWit (1x witness),60356.0,66,0.11
+SPHINCS+-256s,Extended discount (0.5x witness),30498.0,131,0.218
+SPHINCS+-256s,No discount (4x all),239504.0,16,0.027

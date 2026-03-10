@@ -1,1 +1,1 @@
-"""Statistical analysis tools for PQC simulation results."""
+"""Statistical analysis and chain-specific PQC impact tools."""
