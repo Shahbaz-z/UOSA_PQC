@@ -407,18 +407,25 @@ class DESEngine:
         # The block size for the batch is the representative task size (all tasks
         # in one BLOCK_PROPAGATED event carry the same block — different only in
         # announcement vs full for EthHybrid, but that is handled per-task below).
-        representative_task = tasks[0]
+        # Bug 2 fix: use the LARGEST task in the batch for the NIC occupation
+        # calculation, not tasks[0].  For EthHybridRouting the batch can contain
+        # a mix of announcement tasks (100 bytes) and full-block tasks (block.size_bytes).
+        # If tasks[0] is an announcement, nic_batch_start would be computed from a
+        # negligible tx_time, giving subsequent full-block tasks an NIC start that is
+        # far too early — the NIC was occupied for much longer.  The NIC is released
+        # when the LONGEST concurrent send finishes, so we use the largest task.
+        largest_task = max(tasks, key=lambda t: t.size_bytes)
         if self.nic_contention_enabled:
             # Compute shared NIC start time (respects back-to-back sends from
             # earlier BLOCK_PROPAGATED events via _upload_free_at)
             per_peer_bw_sender = sender.config.upload_bandwidth_mbps / max(1, num_concurrent)
             if per_peer_bw_sender > 0:
-                size_megabits_repr = (representative_task.size_bytes * 8) / 1_000_000
+                size_megabits_repr = (largest_task.size_bytes * 8) / 1_000_000
                 batch_tx_time_ms   = (size_megabits_repr / per_peer_bw_sender) * 1000
-                # Schedule the whole batch as one NIC operation
+                # Schedule the whole batch as one NIC operation using the largest task
                 batch_finish_time  = sender.schedule_upload(
                     start_time_ms=self.state.current_time_ms,
-                    size_bytes=representative_task.size_bytes,
+                    size_bytes=largest_task.size_bytes,
                     num_concurrent=num_concurrent,
                 )
                 # All concurrent sends share this start time
@@ -658,10 +665,15 @@ class DESEngine:
         _CHAIN_UTIL_TARGET = {"bitcoin": 0.65, "ethereum": 0.70, "solana": 0.40}
         _util_target = _CHAIN_UTIL_TARGET.get(chain, 0.65)
         import math as _math
+        # Bug 3 fix: unit lognormal (mu=0) scaled by target gives median = _util_target.
+        # Previous formula used mu=log(_util_target) then divided and multiplied by
+        # _util_target, which cancelled to give max(0.20, min(1.0, _util_sample)) —
+        # a lognormal centred at _util_target in natural units, but the
+        # division/multiplication was a no-op (x / t * t == x).  The intent was a
+        # unit lognormal scaled to the target.  Correct formula: mu=0, scale by target.
         _util_sigma = 0.15
-        _util_mu = _math.log(max(_util_target, 0.01))
-        _util_sample = self.rng.lognormvariate(_util_mu, _util_sigma)
-        _block_utilisation = max(0.20, min(1.0, _util_sample / _util_target * _util_target))
+        _util_sample = self.rng.lognormvariate(0.0, _util_sigma)   # unit lognormal, median=1.0
+        _block_utilisation = max(0.20, min(1.0, _util_sample * _util_target))  # scale to target
         max_txs = max(1, int(max_txs * _block_utilisation))
 
         transactions = [
