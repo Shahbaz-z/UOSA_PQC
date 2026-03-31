@@ -334,7 +334,7 @@ class CalibrationRunner:
     def passes_calibration(
         self,
         simulated: Dict[str, float],
-        tolerance: float = 0.20,
+        tolerance: Optional[float] = None,
     ) -> bool:
         """Check whether all simulated metrics are within tolerance.
 
@@ -344,11 +344,17 @@ class CalibrationRunner:
 
         Args:
             simulated: Dict of {metric: simulated_value}.
-            tolerance: Override global tolerance (default 20%).
-                       If None, uses per-metric tolerances from targets.
+            tolerance: Global tolerance override.  If None (default), each
+                metric uses its own per-metric tolerance from CALIBRATION_TARGETS
+                (e.g. 20% for TPS, 60% for fees, 50% for stale rate).
+                Pass an explicit float to override ALL metrics uniformly.
+
+                PREVIOUS BUG: the default was 0.20 (not None), so per-metric
+                tolerances were silently ignored on every call.  Fee metrics
+                (60% tolerance) would incorrectly fail at 20%.
 
         Returns:
-            True if all metrics pass (no NaN, no None, within tolerance).
+            True if all metrics pass (no NaN, no None, within their tolerances).
         """
         for metric, (target, per_metric_tol) in self.targets.items():
             sim_val = simulated.get(metric)
@@ -358,6 +364,7 @@ class CalibrationRunner:
             # `nan > tolerance` is False, which would silently pass NaN metrics.
             if math.isnan(sim_val):
                 return False
+            # Use per-metric tolerance unless a global override is given
             tol = tolerance if tolerance is not None else per_metric_tol
             if target == 0:
                 if sim_val != 0:
@@ -446,12 +453,18 @@ class CalibrationRunner:
         else:
             simulated["block_utilisation"] = float("nan")
 
-        # TPS — derived from blocks_produced and simulation duration
-        blocks_produced = getattr(result, "blocks_produced", 0)
-        txs_per_block   = getattr(result, "avg_txs_per_block", 0)
-        duration_s      = sim_cfg.simulation_duration_ms / 1_000
-        if duration_s > 0 and blocks_produced > 0:
-            simulated["avg_tps"] = (blocks_produced * txs_per_block) / duration_s
+        # TPS — derived from confirmed (non-stale) blocks × avg txs / duration.
+        # IMPORTANT: result.num_blocks = ALL proposed blocks (incl. stale/orphaned).
+        # Using proposed blocks overcounts TPS since stale blocks are not on the
+        # confirmed chain.  We subtract stale blocks to get confirmed blocks.
+        # num_confirmed ≈ num_blocks × (1 - stale_rate)
+        num_blocks_proposed = getattr(result, "num_blocks", 0)
+        stale_rate          = getattr(result, "stale_rate", 0.0)
+        txs_per_block       = getattr(result, "avg_txs_per_block", 0)
+        duration_s          = sim_cfg.simulation_duration_ms / 1_000
+        num_confirmed       = num_blocks_proposed * max(0.0, 1.0 - stale_rate)
+        if duration_s > 0 and num_confirmed > 0:
+            simulated["avg_tps"] = (num_confirmed * txs_per_block) / duration_s
         else:
             simulated["avg_tps"] = float("nan")
 

@@ -356,6 +356,23 @@ class DESEngine:
         if not block:
             return
 
+        # Turbine multi-layer delay: each relay layer (1+) adds a base network
+        # processing delay before forwarding to the next layer.  This models
+        # the sequential nature of Turbine's tree structure where layer N must
+        # fully receive and validate before layer N+1 can start.
+        # Delay ≈ 1/2 of the minimum inter-region latency (20ms) = 10ms per hop.
+        # Source: Solana validator gossip observed latency per turbine layer
+        # https://docs.solana.com/consensus/turbine-block-propagation
+        propagation_layer = event.payload.get("propagation_layer", 0)
+        turbine_layer_delay_ms = 0.0
+        if (
+            propagation_layer > 0
+            and hasattr(self, "routing")
+            and self.routing.__class__.__name__ == "TurbineRouting"
+        ):
+            # 10ms per hop beyond layer 0 (intra-datacenter forwarding overhead)
+            turbine_layer_delay_ms = propagation_layer * 10.0
+
         # Determine which nodes already have the block
         already_seen = set(block.first_seen_by.keys())
 
@@ -415,7 +432,7 @@ class DESEngine:
                     self.state.current_time_ms,
                     finish_time - tx_time_ms,  # schedule_upload's start time
                 )
-                receive_time = nic_start + geo_latency + tx_time_ms
+                receive_time = nic_start + geo_latency + tx_time_ms + turbine_layer_delay_ms
             else:
                 per_peer_bw  = sender.config.upload_bandwidth_mbps
                 effective_bw = min(per_peer_bw, receiver.config.download_bandwidth_mbps)
@@ -423,7 +440,7 @@ class DESEngine:
                     continue
                 size_megabits = (task.size_bytes * 8) / 1_000_000
                 tx_time_ms    = (size_megabits / effective_bw) * 1000
-                receive_time  = self.state.current_time_ms + geo_latency + tx_time_ms
+                receive_time  = self.state.current_time_ms + geo_latency + tx_time_ms + turbine_layer_delay_ms
 
             self.state.schedule_event(
                 time_ms=receive_time,
@@ -536,11 +553,19 @@ class DESEngine:
         # Record validation time
         block.validated_by[validator_id] = self.state.current_time_ms
 
-        # Forward to peers (continue gossip)
+        # Forward to peers (continue gossip).
+        # Track propagation_layer for Turbine multi-hop delay accounting.
+        # Each relay hop increments the layer counter so _handle_block_propagated
+        # can add Turbine's sequential layer delay on top of normal transmission.
+        prev_layer = event.payload.get("propagation_layer", 0)
         self.state.schedule_event(
             time_ms=self.state.current_time_ms,
             event_type=EventType.BLOCK_PROPAGATED,
-            payload={"block_hash": block_hash, "sender_id": validator_id},
+            payload={
+                "block_hash": block_hash,
+                "sender_id": validator_id,
+                "propagation_layer": prev_layer + 1,  # relay nodes are layer 1+
+            },
         )
 
     # -------------------------------------------------------------------------

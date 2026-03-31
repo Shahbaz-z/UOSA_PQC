@@ -50,13 +50,38 @@ class SimulationResult:
     blocks_per_second: float = 0.0
 
     def __post_init__(self):
-        """Compute derived metrics."""
+        """Compute derived metrics and validate field sanity."""
+        import math
+        import warnings
+
         self.total_nodes = self.num_validators + self.num_full_nodes
         if self.simulation_duration_ms > 0:
             self.blocks_per_second = (
                 self.num_blocks / (self.simulation_duration_ms / 1000)
             )
             self.effective_tps = self.blocks_per_second * self.avg_txs_per_block
+
+        # Sanity-check key fields: NaN or negative values indicate engine bugs.
+        # Warn rather than raise so downstream analysis can inspect the result.
+        _checks = {
+            "stale_rate":              self.stale_rate,
+            "avg_propagation_p50_ms": self.avg_propagation_p50_ms,
+            "avg_propagation_p90_ms": self.avg_propagation_p90_ms,
+            "avg_propagation_p95_ms": self.avg_propagation_p95_ms,
+            "avg_block_size_bytes":   self.avg_block_size_bytes,
+            "effective_tps":          self.effective_tps,
+        }
+        for name, val in _checks.items():
+            if math.isnan(val):
+                warnings.warn(
+                    f"SimulationResult.{name} is NaN — check engine output.",
+                    stacklevel=2,
+                )
+            elif val < 0:
+                warnings.warn(
+                    f"SimulationResult.{name} = {val} is negative — check engine output.",
+                    stacklevel=2,
+                )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for DataFrame construction."""

@@ -42,7 +42,12 @@ VOTE_TX_FRACTION: float = 0.75
 VOTE_TX_BASE_BYTES: int = 130
 
 # Ed25519 vote transaction total size (Ed25519 sig = 64 bytes, pk = 32 bytes)
-VOTE_TX_ED25519_SIZE: int = 214  # 130 + 64 (sig) + 32 (pk) - overlap/varint ≈ 214
+# VOTE_TX_ED25519_SIZE: derived as VOTE_TX_BASE_BYTES + sig(64) + pk(32) = 226 bytes.
+# This matches vote_tx_size("Ed25519") = 130 + 64 + 32 = 226.
+# Empirical references: compressed Solana vote transactions on mainnet are
+# typically 214–240 bytes; 226 is consistent with mid-range estimates.
+# Source: https://solana.com/docs/core/transactions (vote program spec)
+VOTE_TX_ED25519_SIZE: int = 226  # = VOTE_TX_BASE_BYTES(130) + sig(64) + pk(32)
 
 # Solana block size limits
 BLOCK_SIZE_BYTES: int = 6_291_456       # 6 MB practical limit (not 32 MB theoretical)
