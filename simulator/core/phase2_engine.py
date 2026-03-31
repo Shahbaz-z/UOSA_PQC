@@ -681,7 +681,15 @@ class Phase2Engine:
             # Phase 2: Verification metrics
             "avg_verification_time_ms": round(avg_verify_ms, 4),
             "max_verification_time_ms": round(max_verify_ms, 4),
+            # verification_failure_rate: fraction of block-receipt events (one per
+            # receiving node per block) where heterogeneous verification exceeded
+            # block_time_ms.  This is an upper-bound proxy for the verification
+            # bottleneck risk, NOT failures / (total_blocks × total_nodes).
+            # The precise name would be 'block_receipt_verify_overhead_rate';
+            # the original key is preserved for backward compatibility with scripts.
             "verification_failure_rate": round(verification_failure_rate, 6),
+            # Alias with a self-documenting name for new analysis code
+            "block_receipt_verify_overhead_rate": round(verification_failure_rate, 6),
             "verification_failures": verification_failures,
             "block_time_ms": block_time_ms,
 
