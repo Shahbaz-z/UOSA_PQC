@@ -116,7 +116,9 @@ class EthereumTxModel:
 
     Attributes:
         base_gas: Intrinsic gas for a simple ETH transfer (21,000).
-        calldata_gas_per_nonzero_byte: Gas per non-zero calldata byte (16).
+        calldata_gas_per_nonzero_byte: Gas per non-zero calldata byte.
+            Pre-Pectra: 16 gas/byte.  Post-Pectra (EIP-7623): 40 gas/byte for heavy
+            calldata.  Default is 40 (current Ethereum mainnet as of 2026).
         calldata_gas_per_zero_byte: Gas per zero calldata byte (4).
         sig_algorithm: Signature algorithm name for gas schedule lookup.
             Defaults to "ECDSA" (backward-compatible with pre-PQC usage).
@@ -135,7 +137,13 @@ class EthereumTxModel:
     # of PQC transactions is ~2.5× higher than this 16 gas/byte model predicts.
     # The model uses pre-Pectra values as a conservative underestimate.
     # Reference: https://eips.ethereum.org/EIPS/eip-7623
-    calldata_gas_per_nonzero_byte: int = 16  # pre-EIP-7623; post-Pectra = 40 for heavy txs
+    # EIP-7623 (Pectra, May 2025): non-zero calldata for heavy txs costs 40 gas/byte.
+    # PQC signatures are 'heavy calldata' by any threshold, so post-Pectra Ethereum
+    # PQC gas costs are ~2.5× higher than the pre-Pectra 16 gas/byte model.
+    # Default changed to 40 to reflect the current (2026) Ethereum network.
+    # To reproduce pre-Pectra analysis, instantiate with calldata_gas_per_nonzero_byte=16.
+    # Reference: https://eips.ethereum.org/EIPS/eip-7623
+    calldata_gas_per_nonzero_byte: int = 40  # EIP-7623 post-Pectra (was 16 pre-Pectra)
     calldata_gas_per_zero_byte: int = 4
     sig_algorithm: str = "ECDSA"       # Algorithm for PQC gas schedule lookup
     avg_calldata_bytes: int = 100       # Average additional calldata

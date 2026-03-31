@@ -160,7 +160,10 @@ AGGREGATION_SCHEMES: Dict[str, AggregationScheme] = {
         quantum_resistant=True,
         _sig_size_fn=_batch_sig,
         _pk_size_fn=_batch_pk,
-        verification_time_factor=0.6,  # 40% faster verification
+        verification_time_factor=1.0,  # No proven batch speedup (matches verification.py).
+        # The 0.6 factor (40% speedup) from literature is a research projection;
+        # no NIST-standardised ML-DSA batch verify protocol exists. Changed to 1.0
+        # to match blockchain/verification.py batch_speedup=1.0 for ML-DSA.
         supported_algorithms=["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
     ),
 }

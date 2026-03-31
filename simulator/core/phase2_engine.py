@@ -266,6 +266,41 @@ class Phase2Engine:
                         )
                 return  # Wait for full block before recording first_seen_by
 
+            # Bitcoin compact block relay (BIP 152) — mirrors engine.py logic
+            is_compact_relay = event.payload.get("is_compact_relay", False)
+            if is_compact_relay:
+                sender_id = event.payload.get("sender_id")
+                sender = (self._engine.topology.get_node(sender_id)
+                          if sender_id else None)
+                if sender and block:
+                    geo_latency = self._engine.topology.sample_latency(
+                        sender.config.region, receiver.config.region
+                    )
+                    effective_bw = min(
+                        sender.config.upload_bandwidth_mbps,
+                        receiver.config.download_bandwidth_mbps,
+                    )
+                    if effective_bw > 0:
+                        size_megabits = (block.size_bytes * 8) / 1_000_000
+                        tx_time_ms = (size_megabits / effective_bw) * 1000
+                        retrieval_time = (
+                            self._engine.state.current_time_ms
+                            + geo_latency   # getblocktxn request leg
+                            + tx_time_ms    # full block download
+                        )
+                        self._engine.state.schedule_event(
+                            time_ms=retrieval_time,
+                            event_type=EventType.BLOCK_RECEIVED,
+                            payload={
+                                "block_hash": block_hash,
+                                "receiver_id": receiver_id,
+                                "sender_id": sender_id,
+                                "is_eth_announcement": False,
+                                "is_compact_relay": False,
+                            },
+                        )
+                return  # Wait for full block retrieval
+
             # Full block received: record receipt and schedule verification
             block.first_seen_by[receiver_id] = self._engine.state.current_time_ms
             receiver.mark_block_seen(block_hash, self._engine.state.current_time_ms)

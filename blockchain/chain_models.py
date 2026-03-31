@@ -112,7 +112,7 @@ BITCOIN_WITNESS_DISCOUNT = 4  # witness bytes count as 1/4 weight
 ETHEREUM_BLOCK_GAS_LIMIT = 30_000_000  # 30M gas (2024 baseline)
 ETHEREUM_BLOCK_TIME_MS = 12_000  # 12 seconds (post-Merge)
 ETHEREUM_BASE_TX_GAS = 21_000  # intrinsic gas cost per transaction
-ETHEREUM_CALLDATA_GAS_PER_BYTE = 16  # non-zero calldata byte cost
+ETHEREUM_CALLDATA_GAS_PER_BYTE = 40  # non-zero calldata byte cost (EIP-7623 post-Pectra; was 16 pre-Pectra)
 ETHEREUM_BASE_TX_OVERHEAD = 120  # non-signature calldata (to, value, nonce etc.)
 
 # Ethereum gas limit presets (2024-2026 planned increases)

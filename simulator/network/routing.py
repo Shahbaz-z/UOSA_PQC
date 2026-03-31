@@ -43,6 +43,10 @@ class PropagationTask:
     # recording first_seen_by.  Prevents announcement latency from being counted
     # as block-received latency (which systematically underestimates Ethereum p90).
     is_eth_announcement: bool = False
+    # True for Bitcoin compact-block relay peers.  When set, _handle_block_received
+    # schedules a second BLOCK_RECEIVED event for the full block after one RTT,
+    # modelling the getblocktxn round-trip of BIP 152.
+    is_compact_relay: bool = False
 
 
 class RoutingStrategy(ABC):
@@ -147,10 +151,27 @@ class TurbineRouting(RoutingStrategy):
         already_seen: set,
         rng: random.Random,
     ) -> List[PropagationTask]:
-        # Only the block proposer does Turbine tree assignment.
-        # Relay nodes (non-proposers) just forward to their assigned children.
-        # For simplicity in the DES, we plan the full tree from the sender's
-        # perspective: the sender picks `fanout` layer-0 nodes.
+        """Plan Turbine tree propagation from sender to at most `fanout` children.
+
+        Both the proposer (layer 0) and each relay node (layer 1+) send to
+        exactly `min(fanout, available)` nodes.  This creates the multi-hop tree
+        structure: the proposer reaches fanout nodes, each of those reaches
+        another fanout, and so on until every node has the block.
+
+        Previous implementation comment said "plan the full tree from the sender's
+        perspective", which is wrong for Turbine — each node only knows its own
+        subtree assignment.  The fix: every sender (proposer or relay) is limited
+        to exactly fanout children from the remaining unseen nodes.  The DES
+        engine's natural BLOCK_VALIDATED → BLOCK_PROPAGATED chain handles the
+        recursive forwarding through the tree layers automatically.
+
+        For a 75-node network with fanout=200, the proposer can still reach all
+        74 other nodes in one hop (fanout ≥ n-1), so the tree degenerates to
+        flat broadcast for small networks — this is correct behaviour, not a bug.
+        At larger scales (fanout=200, n=1500 validators), the tree has
+        ceil(log_200(1500)) ≈ 2 layers, which the engine models correctly through
+        the propagation_layer counter and 10ms/hop delay.
+        """
         available = [
             n for nid, n in all_nodes.items()
             if nid != sender.node_id and nid not in already_seen
@@ -160,8 +181,10 @@ class TurbineRouting(RoutingStrategy):
 
         rng.shuffle(available)
 
+        # Each node (proposer or relay) forwards to at most `fanout` children.
+        # This is the core Turbine property: bounded per-node bandwidth.
         k = min(self.fanout, len(available))
-        layer_0 = available[:k]
+        children = available[:k]
 
         return [
             PropagationTask(
@@ -171,20 +194,33 @@ class TurbineRouting(RoutingStrategy):
                 layer=0,
                 is_compact=False,
             )
-            for p in layer_0
+            for p in children
         ]
 
 
 class CompactBlockRouting(RoutingStrategy):
     """Bitcoin compact block relay (BIP 152).
 
-    First `fanout` peers receive the full block. When those peers relay,
-    they send compact blocks (header + short transaction IDs) which are
-    ~10% of the full block size. Receiving nodes that already have the
-    transactions in their mempool can reconstruct the full block.
+    First `fanout` peers receive the full block from the proposer.
+    When those peers relay, they send compact blocks (header + short txIDs,
+    ~10% of full block size).  A receiving relay node reconstructs the block
+    from its mempool; if transactions are missing it must send `getblocktxn`
+    to the sender and wait for the response.
 
-    This significantly reduces bandwidth for relay hops, making Bitcoin
-    more resilient to PQC signature size inflation during propagation.
+    Mempool hit rate assumption: compact_fraction = 0.10 models the case
+    where the receiving node already has 90% of the transactions.  In practice
+    with PQC signatures, relay nodes have zero PQC transactions in their mempools
+    (they have never seen them), so compact_fraction should approach 1.0 at
+    high PQC adoption.  This fixed value is a documented simplification.
+    Reference: BIP 152 — https://github.com/bitcoin/bips/blob/master/bip-0152.mediawiki
+
+    The compact block relay is modelled as two events for relay peers:
+      1. Compact block arrives (size = block.size_bytes * compact_fraction)
+         → triggers a `getblocktxn` request if reconstruction fails
+      2. Full-block response arrives after one round-trip (2 × geo_latency)
+         → first_seen_by is recorded when the full block is received
+    The PropagationTask uses is_compact_relay=True to signal to the engine
+    that a second BLOCK_RECEIVED event should be scheduled for the full block.
     """
 
     def __init__(self, fanout: int = 8, compact_fraction: float = 0.10):
@@ -215,21 +251,28 @@ class CompactBlockRouting(RoutingStrategy):
         tasks = []
         for p in peers:
             if is_relay:
-                # Relay: send compact block
+                # Relay: send compact block.
+                # is_compact_relay=True signals the engine to schedule a
+                # second BLOCK_RECEIVED event (full block) after one RTT,
+                # mirroring the getblocktxn round-trip of BIP 152.
                 size = max(1, int(block.size_bytes * self.compact_fraction))
-                is_compact = True
+                tasks.append(PropagationTask(
+                    sender_id=sender.node_id,
+                    receiver_id=p.node_id,
+                    size_bytes=size,
+                    layer=0,
+                    is_compact=True,
+                    is_compact_relay=True,   # triggers getblocktxn round-trip
+                ))
             else:
-                # Proposer: send full block to first peers
-                size = block.size_bytes
-                is_compact = False
-
-            tasks.append(PropagationTask(
-                sender_id=sender.node_id,
-                receiver_id=p.node_id,
-                size_bytes=size,
-                layer=0,
-                is_compact=is_compact,
-            ))
+                # Proposer: send full block directly (no reconstruction needed)
+                tasks.append(PropagationTask(
+                    sender_id=sender.node_id,
+                    receiver_id=p.node_id,
+                    size_bytes=block.size_bytes,
+                    layer=0,
+                    is_compact=False,
+                ))
 
         return tasks
 

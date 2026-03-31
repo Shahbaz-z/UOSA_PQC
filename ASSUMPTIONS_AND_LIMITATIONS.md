@@ -172,3 +172,15 @@ The mempool's eviction strategy scans for the lowest fee-rate transaction using 
 
 ### 8.3 Calibration Module
 `simulator/calibration/runner.py` and `simulator/calibration/targets.py` contain a calibration workflow that was used during Phase 1 development. They are not wired into the current automated pipeline and are preserved as utilities.
+
+### 3.14 `EthHybridRouting.fanout=16` — Understates Ethereum Peer Count
+
+**Simplification:** Ethereum mainnet validators maintain ~100 peers on average. The simulator uses `fanout=16`, meaning only 16 peers are eligible to receive the block per hop. With `sqrt(16) = 4` direct-send peers and 12 announcement-only peers, far fewer nodes receive the block quickly than on mainnet. Combined with the 75-node scaled network, Ethereum propagation is modelled with much lower connectivity than reality. Absolute P90 values are likely conservative (higher than mainnet). Qualitative trends (PQC → slower propagation) are preserved.
+
+### 3.15 `CompactBlockRouting.compact_fraction = 0.10` — Fixed Mempool Hit Rate
+
+**Simplification:** Bitcoin BIP 152 compact blocks achieve ~10% of full block size when relay nodes have all transactions in their mempools (fast path). The `compact_fraction = 0.10` constant models this best case regardless of PQC adoption. In practice:
+- At 0% PQC: relay nodes do have the classical transactions → 10% fraction is realistic.
+- At 100% PQC: relay nodes have **never seen** PQC transactions → mempool hit rate ≈ 0% → relay must request the full block (compact_fraction → 1.0).
+
+The fixed 0.10 value significantly understates Bitcoin relay latency at high PQC fractions. The model therefore underestimates Bitcoin propagation degradation under PQC load. This is a conservative assumption that makes PQC look less harmful than it is for Bitcoin relay hops.

@@ -174,10 +174,18 @@ class TestMLDSABatch:
         assert result.aggregated_sig_bytes == SIGNATURE_SIZES["ML-DSA-65"] * 100
         assert result.size_reduction_pct == 0.0
 
-    def test_faster_verification(self):
-        """Verification should be faster (factor < 1.0)."""
+    def test_verification_time_factor_corrected_to_1(self):
+        """ML-DSA-Batch verification_time_factor should be 1.0 (no proven speedup).
+
+        Previous value was 0.6 (40% speedup) from lattice batch literature, but no
+        NIST-standardised ML-DSA batch verify protocol exists. Changed to 1.0 to match
+        blockchain/verification.py batch_speedup=1.0 for ML-DSA (Fix 2.3 from audit).
+        """
         result = analyze_aggregation("ML-DSA-65", "ML-DSA-Batch", batch_size=100)
-        assert result.verification_time_factor < 1.0
+        assert result.verification_time_factor == 1.0, (
+            f"ML-DSA-Batch verification_time_factor should be 1.0 (no proven speedup), "
+            f"got {result.verification_time_factor}"
+        )
 
     def test_all_mldsa_variants_supported(self):
         for algo in ["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"]:

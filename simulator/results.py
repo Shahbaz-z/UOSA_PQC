@@ -46,6 +46,13 @@ class SimulationResult:
     stale_rate: float = 0.0
     orphan_count: int = 0
 
+    # P90 coverage: fraction of total nodes that received the block before P90
+    # was computed.  When coverage < 1.0 (e.g. 0.6), the P90 is computed over
+    # only 60% of nodes — potentially flattering the result.  Consumers should
+    # check coverage alongside avg_propagation_p90_ms to detect incomplete samples.
+    # A coverage of 1.0 means every node received the block within the sim window.
+    avg_propagation_p90_coverage: float = 0.0
+
     # Network metrics
     total_nodes: int = 0
     avg_bandwidth_utilization: float = 0.0

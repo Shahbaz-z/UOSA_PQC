@@ -478,6 +478,11 @@ class DESEngine:
                     # hash first (100 B) and must fetch the full block separately.
                     # first_seen_by is NOT recorded until the full block arrives.
                     "is_eth_announcement": task.is_eth_announcement,
+                    # True for Bitcoin compact-block relay peers: they receive a
+                    # compact block (~10% size) and must send getblocktxn to get
+                    # the missing transactions.  first_seen_by is NOT recorded
+                    # until the full block response arrives.
+                    "is_compact_relay": task.is_compact_relay,
                 },
             )
 
@@ -547,6 +552,48 @@ class DESEngine:
                         },
                     )
             return  # Don't record first_seen_by — wait for full block
+
+        # Bitcoin compact block relay (BIP 152) — getblocktxn round-trip:
+        # A relay node received a compact block (10% of full size).  Model the
+        # BIP 152 reconstruction: if the relay node cannot reconstruct from its
+        # mempool (which is likely for PQC transactions it has never seen), it
+        # sends getblocktxn and must wait for the full block response.
+        # We conservatively assume ALL compact-block relay nodes request the full
+        # block (worst-case: 0% mempool hit rate for novel PQC transactions).
+        is_compact_relay = event.payload.get("is_compact_relay", False)
+        if is_compact_relay:
+            sender_id = event.payload.get("sender_id")
+            sender = self.topology.get_node(sender_id) if sender_id else None
+            if sender and block:
+                geo_latency = self.topology.sample_latency(
+                    sender.config.region, receiver.config.region
+                )
+                effective_bw = min(
+                    sender.config.upload_bandwidth_mbps,
+                    receiver.config.download_bandwidth_mbps,
+                )
+                if effective_bw > 0:
+                    size_megabits = (block.size_bytes * 8) / 1_000_000
+                    tx_time_ms = (size_megabits / effective_bw) * 1000
+                    # BIP 152 round-trip: compact → getblocktxn request → full block
+                    # = announcement leg (already elapsed) + request RTT + download
+                    retrieval_time = (
+                        self.state.current_time_ms
+                        + geo_latency   # getblocktxn request: relay → proposer
+                        + tx_time_ms    # full block download: proposer → relay
+                    )
+                    self.state.schedule_event(
+                        time_ms=retrieval_time,
+                        event_type=EventType.BLOCK_RECEIVED,
+                        payload={
+                            "block_hash": block_hash,
+                            "receiver_id": receiver_id,
+                            "sender_id": sender_id,
+                            "is_eth_announcement": False,
+                            "is_compact_relay": False,  # full block this time
+                        },
+                    )
+            return  # Don't record first_seen_by — wait for full block retrieval
 
         # Record first seen time (full block received)
         block.first_seen_by[receiver_id] = self.state.current_time_ms
@@ -779,13 +826,22 @@ class DESEngine:
         )
         stale_rate = stale_count / total_blocks if total_blocks > 0 else 0
 
+        # P90 coverage: fraction of proposed blocks that have propagation data.
+        # When propagation fails at high PQC fractions, many blocks reach zero
+        # peers and are excluded from propagation_p90.  avg_propagation_p90_coverage
+        # tells downstream consumers how complete the P90 sample is.
+        total_blocks = len(self.state.blocks_proposed)
+        p90_coverage = (
+            len(propagation_p90) / total_blocks if total_blocks > 0 else 0.0
+        )
+
         return SimulationResult(
             chain=self.config.chain,
             signature_algorithm=self.config.signature_algorithm,
             num_validators=self.config.num_validators,
             num_full_nodes=self.config.num_full_nodes,
             simulation_duration_ms=self.config.simulation_duration_ms,
-            num_blocks=len(self.state.blocks_proposed),
+            num_blocks=total_blocks,
             avg_block_size_bytes=avg_block_size,
             avg_txs_per_block=avg_tx_count,
             avg_propagation_p50_ms=avg_p50,
@@ -794,4 +850,5 @@ class DESEngine:
             min_propagation_ms=min(propagation_p90) if propagation_p90 else 0,
             max_propagation_ms=max(propagation_p90) if propagation_p90 else 0,
             stale_rate=stale_rate,
+            avg_propagation_p90_coverage=p90_coverage,
         )
