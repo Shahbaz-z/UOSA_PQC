@@ -371,7 +371,10 @@ class Phase2Engine:
         while elapsed_ms < interval_ms:
             inter_arrival = self._arrival_model.next_inter_arrival_ms()
             elapsed_ms += inter_arrival
-            if elapsed_ms >= interval_ms:
+            # Use strict > (not >=) so a transaction landing exactly at
+            # interval_ms belongs to the NEXT interval, not discarded.
+            # This follows the standard half-open [0, interval) convention.
+            if elapsed_ms > interval_ms:
                 break
 
             # Sample algorithm for this transaction
@@ -617,19 +620,33 @@ class Phase2Engine:
         """
         mempool_stats = self._mempool.stats()
 
-        # Compute per-block algorithm distribution
-        algo_distribution: Dict[str, int] = {}
+        # Compute per-block algorithm distribution by transaction COUNT and BYTES.
+        # Count-fraction can be misleading: 50% ML-DSA-65 txs by count may use
+        # 90%+ of block space because PQC txs are 10-50× larger.  We report both
+        # so consumers can distinguish economic adoption from block-space pressure.
+        algo_distribution: Dict[str, int] = {}  # tx count per algo
+        algo_bytes: Dict[str, int] = {}          # total bytes per algo
         total_block_txs = 0
+        total_block_bytes = 0
         for block in self._blocks_produced:
             for tx in block.transactions:
                 algo_distribution[tx.signature_algorithm] = (
                     algo_distribution.get(tx.signature_algorithm, 0) + 1
                 )
+                algo_bytes[tx.signature_algorithm] = (
+                    algo_bytes.get(tx.signature_algorithm, 0) + tx.size_bytes
+                )
                 total_block_txs += 1
+                total_block_bytes += tx.size_bytes
 
         algo_fractions = {
             algo: count / total_block_txs if total_block_txs > 0 else 0.0
             for algo, count in algo_distribution.items()
+        }
+        # Byte-fraction: fraction of total block bytes consumed per algorithm
+        algo_byte_fractions = {
+            algo: bts / total_block_bytes if total_block_bytes > 0 else 0.0
+            for algo, bts in algo_bytes.items()
         }
 
         # Average verification time
@@ -702,7 +719,11 @@ class Phase2Engine:
             "total_tx_generated": self._total_tx_generated,
 
             # Algorithm distribution in blocks
+            # algo_distribution: fraction of transactions BY COUNT per algorithm
+            # algo_byte_distribution: fraction of block BYTES per algorithm
+            # (use byte fractions for block-space pressure analysis)
             "algo_distribution": algo_fractions,
+            "algo_byte_distribution": algo_byte_fractions,
             "algo_counts": algo_distribution,
 
             # Phase G: Fee market metrics

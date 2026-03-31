@@ -52,6 +52,15 @@ FEE_MARKET_PRESETS = {
         fee_model="priority_fee",
     ),
     "ethereum": FeeMarketConfig(
+        # EIP-1559 protocol target is 50% block fullness (gas_target = gas_limit / 2).
+        # Note: DESEngine._create_block() uses a separate block-fill model with a
+        # target of 70% for Ethereum.  These two values are intentionally different:
+        #   - target_utilization=0.5 governs the EIP-1559 fee adjustment direction
+        #     (fees rise when blocks are >50% full, fall when <50%)
+        #   - The 70% block-fill target models real-world average utilisation
+        # In Phase2Engine, the fee market receives actual block_utilization from
+        # the last produced block, so the two models interact naturally via the
+        # update_base_fee() feedback loop.
         base_fee_floor=1.0,
         base_fee_ceiling=10_000.0,
         target_utilization=0.5,
@@ -188,7 +197,12 @@ class DynamicFeeMarket:
         block_pressure = block_utilization / target
         # Mempool pressure is a secondary signal (dampened by 0.3×)
         mempool_pressure = (mempool_utilization / target) * 0.3
-        # Combined pressure: weighted blend
+        # Effective pressure: take the higher of the two signals.
+        # Note: despite the earlier comment saying "weighted blend", this uses
+        # max() not a linear blend.  With mempool_pressure dampened to 0.3×,
+        # block_pressure dominates whenever blocks are ≥ 30% full — i.e. almost
+        # always.  max() is correct here: either signal alone is sufficient to
+        # justify fee adjustment; taking the maximum avoids double-counting.
         pressure = max(block_pressure, mempool_pressure)
 
         if pressure > 1.0:
@@ -211,8 +225,16 @@ class DynamicFeeMarket:
         Returns:
             Fee in satoshis (or equivalent unit).
         """
-        # Target fee_rate is above base_fee
-        target_rate = self.base_fee * (1.2 if not is_pqc else 1.5)
+        # Target fee_rate is above base_fee.
+        # Bug 1.7 fix: do NOT apply a separate per-byte rate premium for PQC.
+        # PQC transactions already cost more in absolute terms because they are
+        # larger (more bytes × fee_rate).  Adding a higher per-byte RATE for PQC
+        # transactions double-penalises them: higher rate × more bytes = much
+        # higher absolute fee than market conditions justify.
+        # The correct model is a uniform rate above base_fee, regardless of
+        # algorithm.  Economic pressure from PQC comes through block-space
+        # scarcity (more txs priced out) not a rate surcharge.
+        target_rate = self.base_fee * 1.2
 
         # Draw from lognormal
         mu = math.log(max(target_rate, 0.01))
@@ -280,9 +302,14 @@ class DynamicFeeMarket:
                 else 0.0
             ),
             "avg_fee_paid": sum(fees) / len(fees) if fees else 0.0,
+            # Sort once to avoid calling sorted(fees) twice (O(n log n) each).
+            # _fees_paid accumulates every fee for the simulation; for long runs
+            # this list can be large — sort once and reuse for both median branches.
+            # Note: _fees_paid is unbounded (no pruning); for very long Monte Carlo
+            # sweeps this is a latent memory issue but not a correctness problem.
             "median_fee_paid": (
-                sorted(fees)[len(fees) // 2] if len(fees) % 2 == 1
-                else (sorted(fees)[len(fees)//2 - 1] + sorted(fees)[len(fees)//2]) / 2.0
-            ) if fees else 0.0,
+                lambda sf: sf[len(sf) // 2] if len(sf) % 2 == 1
+                           else (sf[len(sf)//2 - 1] + sf[len(sf)//2]) / 2.0
+            )(sorted(fees)) if fees else 0.0,
             "total_fee_checks": self._total_fee_checks,
         }

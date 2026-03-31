@@ -142,6 +142,14 @@ AGGREGATION_SCHEMES: Dict[str, AggregationScheme] = {
         verification_time_factor=1.2,  # tree path verification overhead
         supported_algorithms=["Falcon-512", "Falcon-1024"],
     ),
+    # INCONSISTENCY NOTE (2.1): This module uses verification_time_factor=0.6
+    # (40% speedup) for ML-DSA batch verification based on lattice batch literature.
+    # simulator/blockchain/verification.py uses batch_speedup=1.0 (no speedup) for
+    # ML-DSA in the DES simulation, because no NIST-standardised ML-DSA batch
+    # verification protocol exists yet.  The 0.6 factor here is a research
+    # projection, not an implementable standard.  The two modules give contradictory
+    # answers for the same physical quantity.  The DES simulation (batch_speedup=1.0)
+    # is the conservative/correct choice for current deployable ML-DSA.
     "ML-DSA-Batch": AggregationScheme(
         name="ML-DSA Batch Verification",
         description=(

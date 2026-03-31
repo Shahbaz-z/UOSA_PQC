@@ -24,7 +24,7 @@ This codebase has TWO engine classes with a strict parent/child relationship:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Phase2Engine  (simulator/core/phase2_engine.py)                        │
 │  ─────────────────────────────────────────────────────────────────────  │
-│  • SimPy-compatible stochastic Poisson transaction arrivals             │
+│  • Stochastic Poisson transaction arrivals (Phase2Engine; no SimPy)      │
 │  • GlobalMempool with fee-rate eviction (bounded at 100 MB)             │
 │  • Heterogeneous blocks (mixed classical + PQC algorithm fractions)     │
 │  • Per-transaction verification with CPU resource locking               │
@@ -759,13 +759,25 @@ class DESEngine:
         avg_block_size = sum(block_sizes) / len(block_sizes) if block_sizes else 0
         avg_tx_count = sum(tx_counts) / len(tx_counts) if tx_counts else 0
 
-        # Compute stale rate
-        # A block is "stale" if propagation p90 exceeds 90% of the block time
-        # (industry standard: a block risks orphaning when it takes almost
-        # the full slot to propagate, not merely half)
+        # Compute stale rate (propagation congestion rate).
+        # Denominator: total proposed blocks (not just blocks with propagation data).
+        # Previous implementation used len(propagation_p90) as denominator,
+        # which excluded blocks that reached ZERO peers (p90 = None).  At very
+        # high PQC fractions where propagation completely fails, the stale rate
+        # would be understated because non-propagating blocks were silently dropped
+        # from both numerator and denominator.
+        #
+        # Fix: count blocks with p90 = None as stale (they propagated to nobody),
+        # and use len(state.blocks_proposed) as the denominator.
         stale_threshold = self.block_time_ms * 0.9
-        stale_count = sum(1 for p in propagation_p90 if p > stale_threshold)
-        stale_rate = stale_count / len(propagation_p90) if propagation_p90 else 0
+        total_blocks = len(self.state.blocks_proposed)
+        # Blocks with no propagation data (zero peers received) count as stale
+        zero_propagation_blocks = total_blocks - len(propagation_p90)
+        stale_count = (
+            sum(1 for p in propagation_p90 if p > stale_threshold)
+            + zero_propagation_blocks
+        )
+        stale_rate = stale_count / total_blocks if total_blocks > 0 else 0
 
         return SimulationResult(
             chain=self.config.chain,

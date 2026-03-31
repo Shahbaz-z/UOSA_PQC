@@ -69,7 +69,14 @@ class DualSigConfig:
     pqc_algo: str               = "ML-DSA-65"
     adoption_curve: str         = "logistic"
     migration_start_block: int  = 0
-    migration_end_block: int    = 100_000   # ~2 years for Bitcoin at current block rate
+    # WARNING: this default is calibrated to Bitcoin (~52,560 blocks/year;
+    # 100,000 ≈ 2 years).  For other chains it is WRONG:
+    #   Ethereum: 2,628,000 slots/year → 100,000 ≈ 14 hours
+    #   Solana:   78,840,000 slots/year → 100,000 ≈ 18 minutes
+    # Always use the chain-specific factory functions (bitcoin_ecdsa_to_falcon512(),
+    # ethereum_ecdsa_to_mldsa65(), solana_ed25519_to_falcon512()) or pass an
+    # explicit migration_end_block calibrated to the target chain.
+    migration_end_block: int    = 100_000   # ~2 years for Bitcoin; too short for ETH/Solana
 
     def __post_init__(self) -> None:
         valid_curves = {"linear", "logistic", "step"}
@@ -262,6 +269,12 @@ class DualSigConfig:
 
         Useful as a quick measure of block bloat at a given migration stage.
 
+        Uses pqc_only_avg_sig_size() (not effective_avg_sig_size()) so that
+        Phase 3 (post-migration) correctly reports the PQC-only overhead rather
+        than the dual-sig worst-case.  effective_avg_sig_size() at
+        block_height >= migration_end_block returns combined_sig_size() (the
+        dual-sig peak), which would make Phase 3 look as expensive as Phase 2.
+
         Args:
             block_height: Current block number.
 
@@ -270,8 +283,8 @@ class DualSigConfig:
         """
         classical_total = self.classical_sig_size() + self.classical_pk_size()
         effective_total = (
-            self.effective_avg_sig_size(block_height)
-            + self.effective_avg_pk_size(block_height)
+            self.pqc_only_avg_sig_size(block_height)
+            + self.pqc_only_avg_pk_size(block_height)
         )
         return effective_total / classical_total if classical_total > 0 else 1.0
 

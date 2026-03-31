@@ -29,8 +29,10 @@ This document catalogues every assumption, simplification, and known limitation 
 ### 1.5 P90 Coverage Caveat
 **Simplification:** The P90 propagation metric is computed over whichever nodes have received the block within the simulation window. If only 60% of nodes receive a block (e.g., at very high PQC fractions), the P90 is the 90th percentile of that 60%, not the full network — potentially flattering the result in edge cases.
 
-### 1.6 Off-by-One in Percentile Calculation
-**Known issue:** `propagation_percentile()` computes `index = int(N * p/100)`, which returns the `ceil` percentile rather than `floor`. For P90 with N=100, this gives the 91st element. The result is a mild systematic overestimate of propagation times at all percentiles. At small N (e.g., N=50 validators), the bias is more significant.
+### 1.6 Off-by-One in Percentile Calculation — ✅ FIXED
+~~**Known issue:** `propagation_percentile()` computes `index = int(N * p/100)`, which returns the `ceil` percentile rather than `floor`. For P90 with N=100, this gives the 91st element.~~
+
+**Status: Fixed (commit `869265f`).** `propagation_percentile()` now uses the nearest-rank method: `index = max(0, ceil(N * p/100) - 1)`, which correctly returns the 90th element (index 89) for N=100, p=90. The bug history and rationale are documented inline in `simulator/network/propagation.py`.
 
 ---
 

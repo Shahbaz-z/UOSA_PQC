@@ -129,7 +129,13 @@ class EthereumTxModel:
     """
 
     base_gas: int = 21_000
-    calldata_gas_per_nonzero_byte: int = 16
+    # EIP-7623 (Pectra, May 2025) raised non-zero calldata to 40 gas/byte for
+    # transactions with heavy calldata (floor_cost / floor_data_gas heuristic).
+    # PQC signatures live in calldata; post-Pectra Ethereum, the actual gas cost
+    # of PQC transactions is ~2.5× higher than this 16 gas/byte model predicts.
+    # The model uses pre-Pectra values as a conservative underestimate.
+    # Reference: https://eips.ethereum.org/EIPS/eip-7623
+    calldata_gas_per_nonzero_byte: int = 16  # pre-EIP-7623; post-Pectra = 40 for heavy txs
     calldata_gas_per_zero_byte: int = 4
     sig_algorithm: str = "ECDSA"       # Algorithm for PQC gas schedule lookup
     avg_calldata_bytes: int = 100       # Average additional calldata
