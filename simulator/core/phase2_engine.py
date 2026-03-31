@@ -107,6 +107,15 @@ class Phase2Config:
     # Phase G: Vote transaction overhead (Solana-specific)
     vote_tx_fraction: float = 0.0  # Fraction of block space reserved for votes
 
+    # Phase 4: Heterogeneous agent-based demand model.
+    # When True, Phase2Engine replaces the fixed Poisson lambda with agent-driven
+    # demand: AgentPool.simulate_block_demand() modulates transaction arrivals
+    # based on current fee pressure.  The baseline_fee_rate is the fee at
+    # pqc_fraction=0 (set automatically on first slot tick if not provided).
+    use_agent_demand_model: bool = False
+    agent_pool_size: int = 500       # Number of agents in the pool
+    agent_random_seed: int = 0       # 0 = use config.random_seed + 4
+
 
 class Phase2Engine:
     """Phase 2/3 Simulation Engine with heterogeneous PQC transactions.
@@ -185,6 +194,26 @@ class Phase2Engine:
         # actual slot intervals are longer than block_time_ms (e.g. due to
         # propagation delays and queued events shifting slot boundaries).
         self._last_slot_time_ms: float = 0.0
+
+        # Phase 4: Heterogeneous agent-based demand model
+        self._agent_pool = None
+        self._agent_baseline_fee_rate: float = 1.0   # calibrated on first slot tick
+        self._blocks_elevated: int = 0               # consecutive blocks with fee > 1.5× baseline
+        if config.use_agent_demand_model:
+            from simulator.economics.user_agents import AgentPool
+            seed = config.agent_random_seed or (config.random_seed + 4)
+            self._agent_pool = AgentPool(
+                chain=config.chain,
+                pool_size=config.agent_pool_size,
+                seed=seed,
+            )
+
+        # Phase 4: Demand feedback accumulators
+        self._demand_txs_submitted:  int = 0
+        self._demand_txs_abandoned:  int = 0
+        self._demand_txs_batched:    int = 0
+        self._demand_l2_migrations:  int = 0
+        self._demand_reduction_pct_history: list = []
 
         # Metrics accumulators
         self._blocks_produced: List[Block] = []
@@ -351,7 +380,37 @@ class Phase2Engine:
                 actual_interval_ms = self._engine.block_time_ms
             self._last_slot_time_ms = current_time
 
-            self._generate_transactions_until(actual_interval_ms)
+            # Phase 4: Agent-based demand modulation.
+            # If use_agent_demand_model is enabled, use the agent pool to scale
+            # the number of transactions generated this slot based on fee pressure.
+            if self._agent_pool is not None and self._fee_market is not None:
+                current_rate = self._fee_market.base_fee
+                # Calibrate baseline on the first real slot tick
+                if current_rate > 0 and self._agent_baseline_fee_rate == 1.0:
+                    self._agent_baseline_fee_rate = current_rate
+
+                demand = self._agent_pool.simulate_block_demand(
+                    current_fee_rate  = current_rate,
+                    baseline_fee_rate = self._agent_baseline_fee_rate,
+                    sig_algorithm     = self.config.classical_algo,
+                    blocks_elevated   = self._blocks_elevated,
+                )
+                # Accumulate demand metrics
+                self._demand_txs_submitted += demand["txs_submitted"]
+                self._demand_txs_abandoned += demand["txs_abandoned"]
+                self._demand_txs_batched   += demand["txs_batched"]
+                self._demand_l2_migrations += demand["l2_migrations"]
+                self._demand_reduction_pct_history.append(
+                    demand["demand_reduction_pct"]
+                )
+                # Scale arrival rate by agent submission fraction
+                # (demand destruction: fewer agents submit → lower arrival rate)
+                submission_rate = max(0.01, demand["submission_rate"])
+                effective_interval = actual_interval_ms * submission_rate
+            else:
+                effective_interval = actual_interval_ms
+
+            self._generate_transactions_until(effective_interval)
 
             # Phase G: Update fee market using ACTUAL block utilisation.
             # Previous code hardcoded block_util=1.0 ("always full"), causing
@@ -375,6 +434,14 @@ class Phase2Engine:
                     mempool_utilization=mempool_util,
                     block_utilization=block_util,
                 )
+                # Track consecutive blocks with elevated fees (> 1.5× baseline)
+                # Used by agent model's l2_migration_min_blocks threshold.
+                if (self._agent_baseline_fee_rate > 0
+                        and self._fee_market.base_fee
+                        > 1.5 * self._agent_baseline_fee_rate):
+                    self._blocks_elevated += 1
+                else:
+                    self._blocks_elevated = 0  # reset on fee normalisation
             original_handle_slot(event)
 
         self._engine._handle_slot_tick = patched_handle_slot  # type: ignore
@@ -744,6 +811,24 @@ class Phase2Engine:
             "block_receipt_verify_overhead_rate": round(verification_failure_rate, 6),
             "verification_failures": verification_failures,
             "block_time_ms": block_time_ms,
+
+            # Phase 4: Agent-based demand feedback metrics
+            "agent_demand_model_enabled": self._agent_pool is not None,
+            "blocks_elevated": self._blocks_elevated,
+            # txs that agents chose to submit after fee consideration
+            "demand_txs_submitted":  self._demand_txs_submitted,
+            # txs abandoned because fee exceeded agent max_fee_ratio
+            "demand_txs_abandoned":  self._demand_txs_abandoned,
+            # txs batched to reduce per-tx fee burden
+            "demand_txs_batched":    self._demand_txs_batched,
+            # agents that migrated to L2 due to sustained fee pressure
+            "demand_l2_migrations":  self._demand_l2_migrations,
+            # average demand reduction across all slots (0 = no reduction)
+            "avg_demand_reduction_pct": (
+                sum(self._demand_reduction_pct_history)
+                / len(self._demand_reduction_pct_history)
+                if self._demand_reduction_pct_history else 0.0
+            ),
 
             # Phase 3: Mempool metrics
             "mempool_total_accepted": mempool_stats.total_accepted,

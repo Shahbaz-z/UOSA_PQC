@@ -184,3 +184,69 @@ The mempool's eviction strategy scans for the lowest fee-rate transaction using 
 - At 100% PQC: relay nodes have **never seen** PQC transactions → mempool hit rate ≈ 0% → relay must request the full block (compact_fraction → 1.0).
 
 The fixed 0.10 value significantly understates Bitcoin relay latency at high PQC fractions. The model therefore underestimates Bitcoin propagation degradation under PQC load. This is a conservative assumption that makes PQC look less harmful than it is for Bitcoin relay hops.
+
+---
+
+## 9. Agent-Based Demand Model (Phase 4)
+
+### 9.1 Agent Archetype Composition
+
+**Assumption:** The agent pool uses chain-specific population mixes defined in `simulator/economics/user_agents.py` (`CHAIN_AGENT_MIX`). For the primary Solana simulation:
+
+| Archetype | Fraction | Rationale |
+|-----------|----------|-----------|
+| `arb_bot` | 40% | Solana is dominated by high-frequency MEV/arbitrage activity |
+| `defi_protocol` | 20% | Significant on-chain DeFi activity (Raydium, Orca, Jupiter) |
+| `retail` | 30% | Retail SPL transfers and NFT mints |
+| `whale` | 5% | Institutional validators and large-position holders |
+| `exchange` | 5% | Centralised exchange withdrawal batches |
+
+For Bitcoin, the mix is retail-dominant (60% retail, 25% exchange, 10% whale, 5% arb_bot), reflecting Bitcoin's payment/settlement use-case. For Ethereum, arb_bot and defi_protocol together account for 40%, consistent with on-chain MEV data (Flashbots, 2024).
+
+**Justification:** These fractions are estimates, not empirically calibrated distributions. On-chain transaction type data is not directly observable from public mempool snapshots (intent is private until inclusion). The fractions are bounded by heuristic evidence: Flashbots reports 60–70% of Ethereum blocks contain MEV bundles; Chainalysis estimates retail transfers comprise 40–60% of Bitcoin transaction count. The model treats these as order-of-magnitude inputs, not precise measurements.
+
+### 9.2 Agent Threshold Parameters
+
+Each archetype has three key parameters: `max_fee_ratio` (fraction of tx value the agent tolerates as fee), `batch_threshold_ratio` (fee multiple above baseline that triggers batching), and `l2_migration_threshold_ratio` (fee multiple that triggers L2 migration). Default values:
+
+| Archetype | max\_fee\_ratio | batch\_threshold | L2\_migration\_threshold | L2\_min\_blocks |
+|-----------|----------------|-----------------|--------------------------|----------------|
+| retail | 5% of tx value | 2× baseline | 5× baseline | 50 |
+| whale | 1% of tx value | 20× (never) | 50× (never) | 1,000 |
+| arb\_bot | 50% of profit | 100× (never) | 10× baseline | 2 |
+| defi\_protocol | 2% of position | 3× baseline | 5× baseline | 100 |
+| exchange | 0.1% of value | 1.5× baseline | 10× baseline | 500 |
+
+**Simplification:** `will_submit()` uses a hard threshold comparison (`ratio <= batch_threshold_ratio × noise`) rather than a continuous probability function. The noise term (`gauss(0, 0.1)`) adds ±10% individual variation. A logistic demand curve (as used in the dual-sig migration model) would be more theoretically rigorous but introduces an additional shape parameter that is equally unconstrained by data.
+
+**Impact:** The hard threshold model overstates the abruptness of demand destruction — in reality, submission probability declines gradually as fees approach and exceed agent thresholds. This makes the demand model a coarser approximation of real elasticity than the logistic formulation.
+
+### 9.3 `blocks_elevated` Threshold (1.5×)
+
+**Assumption:** The `blocks_elevated` counter increments when the current fee rate exceeds `1.5 × baseline_fee_rate`. This threshold is used to determine when L2 migration triggers (agents require `blocks_elevated ≥ l2_migration_min_blocks` sustained consecutive blocks at elevated fees before migrating).
+
+**Justification:** The 1.5× multiplier is an ad-hoc choice representing a "materially elevated but not extreme" fee condition. No empirical evidence directly informs this value for PQC-inflated fees. Bitcoin and Ethereum historical mempool data show that retail users begin delaying transactions at approximately 1.5–3× median fee (Glassnode, 2022), which provides loose support for the lower bound.
+
+**Impact:** A lower threshold (e.g., 1.2×) would trigger L2 migration sooner, amplifying demand destruction at moderate PQC fractions. A higher threshold (e.g., 2×) would suppress migration entirely for most simulation runs. The 1.5× value is intentionally conservative (makes PQC demand destruction look less severe).
+
+### 9.4 `verification_cost_weight` and Censorship Incentive
+
+**Assumption:** `BlockBuilder.verification_cost_weight = 0.0` by default (pure fee-per-resource ordering). When set to 0.3, the block priority score blends fee-per-resource (70%) with verification-efficiency fee-per-µs (30%), creating a rational censorship incentive: validators prefer Falcon-512 (100 µs verify) over SLH-DSA-128s (~1,000 µs verify) at equal absolute fees.
+
+**Simplification:** The blending formula (`base_score × (1-w) + normalised_verify × w`) uses a fixed reference verification time of 60 µs (ECDSA baseline). This normalisation means the verify-efficiency component is interpretable relative to ECDSA but assumes validators have accurate per-transaction verify-time estimates before including them in a block — which is not true in practice (validators learn verify time only after performing verification).
+
+**Impact:** The censorship incentive model is illustrative rather than mechanistically accurate. Real validator censorship would be driven by ex-post block reward shortfalls relative to slot time, not ex-ante verify-time predictions.
+
+### 9.5 Agent Pool Size
+
+**Default:** 500 agents per simulation run (configurable via `Phase2Config.agent_pool_size`). The default pool of 500 is a computational convenience, not an empirically motivated figure. Increasing to 5,000 agents would smooth the demand-reduction distribution but would add approximately 10× per-block agent simulation overhead.
+
+**Statistical note:** At 500 agents with the Solana mix, the arb_bot cohort contains 200 agents and the retail cohort contains 150 agents — sufficient for smooth aggregate behaviour. Cohorts with 5% share (25 agents) may show higher variance in L2-migration counts during short simulations.
+
+### 9.6 `tx_viability.py` — Analytical, Not Simulated
+
+**Design choice:** `simulator/economics/tx_viability.py` is a pure analytical module — it does not run a discrete-event simulation. Fee estimates are computed from chain-specific formulae (sat/vbyte × tx_size for Bitcoin, gas × gwei + precompile for Ethereum, lamports/CU × CU\_COSTS for Solana) rather than sampled from the DES engine's fee market.
+
+**Implication:** Viability thresholds (`MAX_FEE_FRACTION`) are static per-type constants, not drawn from an agent-preference distribution. The module answers "at a given fee rate, which transaction types are economically irrational?" rather than "what fraction of agents will stop submitting?" The two questions are complementary — the agent model answers the latter.
+
+**`TYPICAL_TX_VALUES_USD` sourcing:** Dust threshold ($0.01 BTC) is derived from Bitcoin Core's `GetDustThreshold()` at a 3 sat/vbyte relay fee rate and a \$60,000 BTC price. Ethereum and Solana values are informed by Dune Analytics median transaction size distributions (2024) and should be treated as representative order-of-magnitude figures, not market-surveyed medians.

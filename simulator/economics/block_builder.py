@@ -156,6 +156,19 @@ class BlockBuilder:
     sig_preference_model: str     = "fee_per_gas"
     classical_algo: str           = "ECDSA"
 
+    # Task 4 (Phase 4): Verification cost weight for censorship incentive modelling.
+    # Rational validators maximise fee_revenue / resource_cost.  Under PQC, an
+    # expensive-to-verify algorithm (SLH-DSA: ~900k gas) has a lower
+    # fee_per_resource ratio than a cheap one (Falcon-512: ~80k gas) at the same
+    # absolute fee.  verification_cost_weight ∈ [0, 1] blends the pure-fee score
+    # with a verification-cost-adjusted score:
+    #   adjusted_score = fee_score * (1 - w) + fee_per_verify_us * w
+    # w=0 → pure fee ordering (no censorship bias)
+    # w=1 → pure verification-cost ordering (maximum censorship pressure)
+    # w=0.3 is a reasonable default: validators prefer fee/gas but are not
+    # indifferent to verification overhead.
+    verification_cost_weight: float = 0.0  # disabled by default; set 0.3 for censorship analysis
+
     # Chain-specific block limits (used for capacity checks)
     BLOCK_LIMITS: Dict[str, Dict] = field(default_factory=lambda: {
         "bitcoin":  {"weight_units": 4_000_000},
@@ -165,6 +178,12 @@ class BlockBuilder:
 
     def score_transaction(self, tx: Transaction) -> float:
         """Compute a priority score for a transaction.
+
+        When verification_cost_weight > 0 (Task 4), the score blends the
+        standard fee-per-resource metric with a verification-efficiency metric
+        (fee_per_verify_us).  This creates the censorship incentive: validators
+        rationally prefer fast-verify algorithms (Falcon-512) over slow-verify
+        ones (SLH-DSA-128s) at equal absolute fees.
 
         Higher score → higher likelihood of inclusion.
 
@@ -177,18 +196,29 @@ class BlockBuilder:
         model = self.sig_preference_model
 
         if model == "fee_per_byte":
-            return tx.fee_per_byte()
-        if model == "fee_per_weight_unit":
-            return tx.fee_per_weight_unit()
-        if model == "fee_per_gas":
-            return tx.fee_per_gas()
-        if model == "fee_per_compute_unit":
-            return tx.fee_per_compute_unit()
-        if model == "fee_per_verify_us":
-            return tx.fee_per_verify_us()
+            base_score = tx.fee_per_byte()
+        elif model == "fee_per_weight_unit":
+            base_score = tx.fee_per_weight_unit()
+        elif model == "fee_per_gas":
+            base_score = tx.fee_per_gas()
+        elif model == "fee_per_compute_unit":
+            base_score = tx.fee_per_compute_unit()
+        elif model == "fee_per_verify_us":
+            base_score = tx.fee_per_verify_us()
+        else:
+            base_score = tx.fee_per_byte()
 
-        # Default: fee per byte
-        return tx.fee_per_byte()
+        # Task 4: Blend with verification efficiency if weight > 0
+        if self.verification_cost_weight > 0 and tx.verify_time_us > 0:
+            w = max(0.0, min(1.0, self.verification_cost_weight))
+            verify_score = tx.fee_per_verify_us()
+            # Normalise verify_score to be on the same scale as base_score
+            # by using the ratio relative to a reference algorithm (ECDSA: 60 µs)
+            _REF_VERIFY_US = 60.0
+            normalised_verify = verify_score * (tx.verify_time_us / _REF_VERIFY_US)
+            return base_score * (1 - w) + normalised_verify * w
+
+        return base_score
 
     def _capacity_remaining(
         self,
