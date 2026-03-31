@@ -41,7 +41,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-import simpy
+# (simpy removed: Phase2Engine uses DESEngine's heapq analytical loop,
+#  not SimPy.  SimPy was used in an earlier prototype.)
 
 from simulator.core.engine import DESEngine, SimulationConfig
 from simulator.core.events import EventType, Event
@@ -210,7 +211,15 @@ class Phase2Engine:
         original_handle_received = self._engine._handle_block_received
 
         def patched_handle_received(event: Event) -> None:
-            """Override: use per-transaction verification times."""
+            """Override: use per-transaction verification times.
+
+            Replicates the Ethereum two-phase announcement logic from
+            DESEngine._handle_block_received so that Phase 2 Ethereum
+            simulations correctly model the announcement → full-block-fetch
+            latency.  Without this, announcement events would mark
+            first_seen_by immediately, systematically underestimating
+            Ethereum propagation latency.
+            """
             block_hash = event.payload["block_hash"]
             receiver_id = event.payload["receiver_id"]
             receiver = self._engine.topology.get_node(receiver_id)
@@ -219,6 +228,40 @@ class Phase2Engine:
             if not block or receiver.has_seen_block(block_hash):
                 return
 
+            # Ethereum two-phase retrieval (mirrors DESEngine._handle_block_received)
+            is_eth_announcement = event.payload.get("is_eth_announcement", False)
+            if is_eth_announcement:
+                sender_id = event.payload.get("sender_id")
+                sender = (self._engine.topology.get_node(sender_id)
+                          if sender_id else None)
+                if sender and block:
+                    geo_latency = self._engine.topology.sample_latency(
+                        sender.config.region, receiver.config.region
+                    )
+                    effective_bw = min(
+                        sender.config.upload_bandwidth_mbps,
+                        receiver.config.download_bandwidth_mbps,
+                    )
+                    if effective_bw > 0:
+                        size_megabits = (block.size_bytes * 8) / 1_000_000
+                        tx_time_ms = (size_megabits / effective_bw) * 1000
+                        retrieval_time = (
+                            self._engine.state.current_time_ms
+                            + geo_latency + tx_time_ms
+                        )
+                        self._engine.state.schedule_event(
+                            time_ms=retrieval_time,
+                            event_type=EventType.BLOCK_RECEIVED,
+                            payload={
+                                "block_hash": block_hash,
+                                "receiver_id": receiver_id,
+                                "sender_id": sender_id,
+                                "is_eth_announcement": False,
+                            },
+                        )
+                return  # Wait for full block before recording first_seen_by
+
+            # Full block received: record receipt and schedule verification
             block.first_seen_by[receiver_id] = self._engine.state.current_time_ms
             receiver.mark_block_seen(block_hash, self._engine.state.current_time_ms)
 
@@ -270,10 +313,23 @@ class Phase2Engine:
 
             self._generate_transactions_until(actual_interval_ms)
 
-            # Phase G: Update fee market after each block
+            # Phase G: Update fee market using ACTUAL block utilisation.
+            # Previous code hardcoded block_util=1.0 ("always full"), causing
+            # EIP-1559 to perpetually push fees upward regardless of whether
+            # the block was actually full.  Compute real utilisation from the
+            # last produced block vs the block size limit.
             if self._fee_market is not None:
                 mempool_util = self._mempool.utilization
-                block_util = 1.0  # Assume full blocks for now
+                if self._blocks_produced:
+                    last_block = self._blocks_produced[-1]
+                    max_bytes  = self._engine.block_size_limit
+                    block_util = (
+                        last_block.size_bytes / max_bytes
+                        if max_bytes > 0 else 1.0
+                    )
+                    block_util = max(0.0, min(1.0, block_util))
+                else:
+                    block_util = 0.0  # No blocks produced yet
                 self._fee_market.update_base_fee(
                     current_time_ms=current_time,
                     mempool_utilization=mempool_util,
@@ -406,7 +462,11 @@ class Phase2Engine:
 
         # For mempool selection we use byte size (propagation size)
         # The capacity constraint is chain-specific but mempool stores byte-sized txs
-        max_txs = max_block_size  # effectively unlimited; byte budget is the real constraint
+        # Use a generous but semantically meaningful max_txs cap.
+        # The byte budget (max_block_size) is the real constraint; 10,000 txs
+        # is an upper bound that prevents passing the block size in bytes as a
+        # transaction count (e.g. 6,000,000 for Solana) which is misleading.
+        max_txs = 10_000
 
         # Select transactions from mempool
         candidates = self._mempool.get_block_candidates(
@@ -513,9 +573,20 @@ class Phase2Engine:
         for tx in block.transactions:
             profile = VERIFICATION_PROFILES.get(tx.signature_algorithm)
             if profile:
-                total_serial_us += profile.verify_time_us * tx.num_signatures
+                # Apply batch_speedup for algorithms that support batch verification
+                # (Ed25519: 0.5×; Schnorr: 0.4×; all PQC: 1.0 = no batch standard).
+                # This matches compute_block_verification_time() in verification.py
+                # which also applies batch_speedup when use_batch=True (the default).
+                # Without this, Ed25519 verification was overestimated 2× vs
+                # Phase 1's standalone analysis, making PQC look relatively worse.
+                verify_us = (
+                    profile.verify_time_us * profile.batch_speedup
+                    if profile.batch_speedup < 1.0
+                    else profile.verify_time_us
+                )
+                total_serial_us += verify_us * tx.num_signatures
             else:
-                # Unknown algo: conservative 500 µs/sig
+                # Unknown algo: conservative 500 µs/sig (no batch speedup assumed)
                 total_serial_us += 500.0 * tx.num_signatures
 
         # Mirror Node.verification_time_ms(): divide by speed factor only.

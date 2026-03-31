@@ -167,6 +167,11 @@ class DESEngine:
         self.topology = NetworkTopology(rng=self.rng)
         self.state = SimulationState(end_time_ms=config.simulation_duration_ms)
 
+        # Set to True to populate state.completed_events for debugging.
+        # Off by default: a 5-minute Solana run produces ~280k events and
+        # completed_events is never read in normal result computation.
+        self._debug_keep_events: bool = False
+
         # Event handlers
         self._handlers: Dict[EventType, Callable[[Event], None]] = {
             EventType.SLOT_TICK: self._handle_slot_tick,
@@ -244,7 +249,10 @@ class DESEngine:
             if handler:
                 handler(event)
 
-            self.state.completed_events.append(event)
+            # completed_events is only populated in debug mode to avoid
+            # unbounded memory growth (~280k events in a 5-min Solana run).
+            if getattr(self, "_debug_keep_events", False):
+                self.state.completed_events.append(event)
             events_processed += 1
 
         logger.info(
@@ -377,37 +385,45 @@ class DESEngine:
             )
 
             # Transmission time with NIC contention.
-            # schedule_upload() updates sender._upload_free_at so that
-            # back-to-back block sends (e.g., validator forwarding two blocks
-            # in rapid succession) correctly queue behind each other instead of
-            # both starting at self.state.current_time_ms.  The NIC bandwidth
-            # division logic (upload_bw / num_concurrent) is identical to the
-            # previous inline model, but now the link serialisation is tracked.
+            # schedule_upload() both computes the per-peer transmission duration
+            # AND tracks sender._upload_free_at so that back-to-back block sends
+            # correctly serialise on the NIC link.  Its return value (finish_time)
+            # is used as the actual send-complete time so that the BLOCK_RECEIVED
+            # event timestamp reflects NIC serialisation — not just the nominal
+            # per-peer bandwidth fraction.  This corrects the previous "decorative"
+            # state bug where _upload_free_at was maintained but never fed back
+            # into receive_time.
             if self.nic_contention_enabled:
-                per_peer_bw = sender.config.upload_bandwidth_mbps / num_concurrent
-            else:
-                per_peer_bw = sender.config.upload_bandwidth_mbps
-
-            # Bottleneck: limited by sender upload share or receiver download
-            effective_bw = min(per_peer_bw, receiver.config.download_bandwidth_mbps)
-            if effective_bw <= 0:
-                continue
-
-            size_megabits = (task.size_bytes * 8) / 1_000_000
-            tx_time_ms = (size_megabits / effective_bw) * 1000
-
-            if self.nic_contention_enabled:
-                # Wire schedule_upload so _upload_free_at is maintained.
-                # We pass num_concurrent so the method applies the same BW
-                # division as above — keeping the two paths consistent.
-                sender.schedule_upload(
+                finish_time = sender.schedule_upload(
                     start_time_ms=self.state.current_time_ms,
                     size_bytes=task.size_bytes,
                     num_concurrent=num_concurrent,
                 )
-
-            delay_ms = geo_latency + tx_time_ms
-            receive_time = self.state.current_time_ms + delay_ms
+                # Bottleneck: also cap by receiver download speed.
+                # schedule_upload computes sender-side send time; if the
+                # receiver's download is slower, transmission takes longer.
+                per_peer_bw  = sender.config.upload_bandwidth_mbps / num_concurrent
+                effective_bw = min(per_peer_bw, receiver.config.download_bandwidth_mbps)
+                if effective_bw <= 0:
+                    continue
+                size_megabits = (task.size_bytes * 8) / 1_000_000
+                # Re-compute tx_time_ms at the effective (bottlenecked) bandwidth
+                tx_time_ms = (size_megabits / effective_bw) * 1000
+                # Send starts when NIC is free (may be later than current_time_ms
+                # for back-to-back sends); add geo latency on top
+                nic_start = max(
+                    self.state.current_time_ms,
+                    finish_time - tx_time_ms,  # schedule_upload's start time
+                )
+                receive_time = nic_start + geo_latency + tx_time_ms
+            else:
+                per_peer_bw  = sender.config.upload_bandwidth_mbps
+                effective_bw = min(per_peer_bw, receiver.config.download_bandwidth_mbps)
+                if effective_bw <= 0:
+                    continue
+                size_megabits = (task.size_bytes * 8) / 1_000_000
+                tx_time_ms    = (size_megabits / effective_bw) * 1000
+                receive_time  = self.state.current_time_ms + geo_latency + tx_time_ms
 
             self.state.schedule_event(
                 time_ms=receive_time,
@@ -603,14 +619,18 @@ class DESEngine:
         return block
 
     def _select_gossip_peers(self, sender: Node, block: Block) -> List[Node]:
-        """Select peers for gossip propagation (legacy fallback).
+        """[DEPRECATED — dead code] Legacy gossip peer selection.
 
-        NOTE: The primary propagation path now uses self.routing.plan_propagation()
-        in _handle_block_propagated(). This method is kept for backward
-        compatibility with Phase2Engine monkey-patches and tests.
+        The primary propagation path uses self.routing.plan_propagation()
+        in _handle_block_propagated(), which dispatches to chain-specific
+        routing strategies (Turbine, CompactBlock, EthHybrid).
 
-        Excludes nodes that have already seen the block.
-        Uses random selection with configured fanout.
+        Phase2Engine does NOT monkey-patch propagation, so this method is
+        never called in any current code path.  It is retained only because
+        removing it would require a minor version bump to avoid breaking any
+        downstream forks that may reference it directly.
+
+        DO NOT use in new code.  Use self.routing.plan_propagation() instead.
         """
         all_nodes = list(self.topology.nodes.values())
         available = [

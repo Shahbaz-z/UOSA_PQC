@@ -261,8 +261,18 @@ class TestBlockIndexO1:
 class TestPhase2VerifyConsistency:
     """Phase2Engine._compute_heterogeneous_verify_time must match Phase1 physics."""
 
-    def test_verify_time_matches_phase1_for_single_algo(self):
-        """For a uniform block, Phase2 and Phase1 verify times must match."""
+    def test_verify_time_phase2_applies_batch_speedup(self):
+        """Phase2 applies batch_speedup for Ed25519; Phase1 does not.
+
+        Node.verification_time_ms() (Phase 1) uses raw verify_time_us without
+        batch speedup.  _compute_heterogeneous_verify_time() (Phase 2) applies
+        batch_speedup for algorithms that support it (Ed25519: 0.5×).
+
+        This means Phase 2 is MORE accurate for Ed25519 (batch verification
+        is standard in validators), and the two paths correctly diverge for
+        batch-verifiable algorithms.  For non-batch algorithms (ML-DSA: 1.0×)
+        they should still agree.
+        """
         from simulator.core.phase2_engine import Phase2Engine, Phase2Config
         from simulator.network.node import Node, NodeConfig
         from simulator.network.propagation import Block, Transaction
@@ -286,25 +296,46 @@ class TestPhase2VerifyConsistency:
         node = Node(config=node_cfg, env=ss)
 
         # Build a uniform Ed25519 block (10 txs, 1 sig each)
-        txs = [
+        txs_ed = [
             Transaction(
                 tx_id=f"t{i}", size_bytes=250, signature_algorithm="Ed25519",
                 num_signatures=1, fee_satoshis=1000, arrival_time_ms=0.0
             )
             for i in range(10)
         ]
-        block = Block(
-            block_hash="bh", parent_hash="g", height=1,
-            proposer_id="p0", timestamp_ms=0.0, transactions=txs
+        block_ed = Block(
+            block_hash="bh_ed", parent_hash="g", height=1,
+            proposer_id="p0", timestamp_ms=0.0, transactions=txs_ed
         )
 
-        phase2_time = engine._compute_heterogeneous_verify_time(block, node)
+        phase2_ed = engine._compute_heterogeneous_verify_time(block_ed, node)
+        phase1_ed  = node.verification_time_ms("Ed25519", 10)
 
-        # Phase 1 model: verify_time_ms(algo, n_sigs)
-        phase1_time = node.verification_time_ms("Ed25519", 10)
+        # Phase 2 applies batch_speedup (0.5× for Ed25519) → should be half of Phase 1
+        ed_profile = VERIFICATION_PROFILES["Ed25519"]
+        assert phase2_ed == pytest.approx(phase1_ed * ed_profile.batch_speedup, rel=0.01), (
+            f"Phase2 Ed25519 ({phase2_ed:.4f} ms) should equal Phase1 ({phase1_ed:.4f} ms) × "
+            f"batch_speedup ({ed_profile.batch_speedup})"
+        )
 
-        assert phase2_time == pytest.approx(phase1_time, rel=0.01), (
-            f"Phase2 ({phase2_time:.4f} ms) should match Phase1 ({phase1_time:.4f} ms)"
+        # For non-batch algorithms (ML-DSA: batch_speedup=1.0), Phase2 and Phase1 agree
+        txs_ml = [
+            Transaction(
+                tx_id=f"m{i}", size_bytes=3500, signature_algorithm="ML-DSA-65",
+                num_signatures=1, fee_satoshis=1000, arrival_time_ms=0.0
+            )
+            for i in range(10)
+        ]
+        block_ml = Block(
+            block_hash="bh_ml", parent_hash="g", height=1,
+            proposer_id="p0", timestamp_ms=0.0, transactions=txs_ml
+        )
+
+        phase2_ml = engine._compute_heterogeneous_verify_time(block_ml, node)
+        phase1_ml  = node.verification_time_ms("ML-DSA-65", 10)
+        assert phase2_ml == pytest.approx(phase1_ml, rel=0.01), (
+            f"Phase2 ML-DSA-65 ({phase2_ml:.4f} ms) should match Phase1 ({phase1_ml:.4f} ms) "
+            "since batch_speedup=1.0 (no batch verify standard for lattice schemes)"
         )
 
     def test_power_factor_halves_time_cores_do_not(self):

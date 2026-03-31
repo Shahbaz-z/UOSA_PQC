@@ -28,7 +28,9 @@ class SimulationState:
     event_queue: List[Event] = field(default_factory=list)
     event_counter: int = 0  # Unique sequence for deterministic ordering
 
-    # Completed events (for post-simulation analysis)
+    # Completed events (populated only when DESEngine._debug_keep_events=True).
+    # Disabled by default to avoid unbounded memory growth: a 5-minute Solana
+    # simulation produces ~280,000 events, none of which are read post-simulation.
     completed_events: List[Event] = field(default_factory=list)
 
     # Block tracking
