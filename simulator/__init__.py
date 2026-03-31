@@ -1,9 +1,20 @@
-"""PQC Network Simulator - Discrete Event Simulation for blockchain propagation.
+"""PQC Network Simulator — Discrete Event Simulation for blockchain propagation.
 
-Phase 1: Network Calibration Layer
-- Models block propagation across realistic validator networks
-- Calibrates against current Ed25519/ECDSA baseline metrics
-- Provides foundation for Phase 2 (PQC injection) and Phase 3 (economic ABM)
+ENGINE HIERARCHY (quick reference)
+────────────────────────────────────
+  DESEngine        — Phase 1: propagation, calibration, new module integration
+  Phase2Engine     — Phase 2/3: PQC sweeps, mempool, fee market, vote overhead
+  See simulator/core/engine.py for the full hierarchy diagram.
+
+USAGE
+─────
+  # Phase 1 — propagation only
+  from simulator import DESEngine, SimulationConfig
+  result = DESEngine(SimulationConfig(chain="solana", ...)).run()
+
+  # Phase 2/3 — PQC sweeps with stochastic arrivals and fee market
+  from simulator.core.phase2_engine import Phase2Engine, Phase2Config
+  result = Phase2Engine(Phase2Config(chain="solana", pqc_fraction=0.5)).run()
 """
 
 from simulator.core.engine import DESEngine, SimulationConfig

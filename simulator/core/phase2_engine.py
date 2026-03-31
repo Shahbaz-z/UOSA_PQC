@@ -1,16 +1,35 @@
 """Phase 2/3 DES Engine: Stochastic PQC Shock + Economic Mempool Eviction.
 
-Extends the Phase 1 DESEngine with:
-  1. PoissonArrivalModel for stochastic transaction generation
-  2. GlobalMempool with bounded capacity and fee-rate eviction
-  3. AlgorithmMix for heterogeneous classical + PQC signature blocks
-  4. Per-transaction verification loop that locks CPU resources for
-     each signature's specific verification time
+RELATIONSHIP TO DESEngine
+─────────────────────────
+Phase2Engine WRAPS DESEngine via composition (not inheritance).
+Do NOT replace DESEngine with Phase2Engine — they serve different purposes.
+See simulator/core/engine.py for the full engine hierarchy diagram.
 
-CRITICAL PHYSICS CONSTRAINT:
+  Phase2Engine.__init__() constructs a DESEngine internally and stores
+  it as self._engine.  At runtime, Phase2Engine.run() monkey-patches
+  two of DESEngine's event handlers:
+
+    _create_block          → self._create_heterogeneous_block
+    _handle_block_received → patched_handle_received (per-tx verify)
+
+  After patching, it calls self._engine.run() to execute the event loop,
+  then computes extended Phase 2/3 metrics from the result.
+
+ADDED CAPABILITIES (beyond Phase 1 DESEngine)
+──────────────────────────────────────────────
+  1. PoissonArrivalModel — stochastic transaction generation
+  2. GlobalMempool       — bounded 100 MB capacity, fee-rate eviction
+  3. AlgorithmMix        — heterogeneous classical + PQC signature blocks
+  4. Per-transaction verification — CPU resources locked per sig algorithm
+  5. DynamicFeeMarket    — EIP-1559/first-price/priority-fee models
+  6. Vote transactions   — Solana-specific block-space overhead injection
+
+CRITICAL PHYSICS CONSTRAINT
+────────────────────────────
   When verifying a heterogeneous block, each transaction is iterated
-  individually. The SimPy Resource (cpu_cores) is held for the EXACT
-  verification time of that transaction's specific signature algorithm.
+  individually. The CPU core is occupied for the EXACT verification time
+  of that transaction's specific signature algorithm.
   This means an SLH-DSA-128f signature (5,940 µs) physically blocks
   a CPU core 100× longer than an Ed25519 signature (60 µs).
 """

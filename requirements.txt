@@ -1,25 +1,40 @@
-# Core simulation & data
-simpy>=4.0.0
-numpy>=1.26.0
-pandas>=2.0.0
-scipy>=1.11.0
-statistics>=1.0.3.5
+# ─────────────────────────────────────────────────────────────────
+# UOSA_PQC — Python dependency manifest
+# Install: pip install -r requirements.txt
+# Python >= 3.10 required (uses match/case and dataclasses features)
+# ─────────────────────────────────────────────────────────────────
+
+# Core simulation & numerical
+simpy>=4.0.0          # Discrete-event simulation (Phase2Engine)
+numpy>=1.26.0         # Numerical arrays, histograms, random sampling
+pandas>=2.0.0         # CSV I/O, result DataFrames
+scipy>=1.11.0         # stats.norm (analysis/statistical_analysis.py confidence intervals)
 
 # Visualisation & web app
-streamlit>=1.30.0
-plotly>=5.18.0
+streamlit>=1.30.0     # Interactive dashboard (app/pqc_demo_streamlit.py)
+plotly>=5.18.0        # Interactive charts across all Streamlit tabs
 
 # PDF report generation
-reportlab>=4.0.0
+reportlab>=4.0.0      # generate_pqc_report.py PDF output
 
-# Cryptography & PQC benchmarking
-liboqs-python>=0.10.0
-PyNaCl>=1.5.0
-cryptography>=42.0.0
+# PQC cryptography benchmarking
+liboqs-python>=0.10.0 # Real PQC key sizes / verification times (optional; mock fallback available)
+PyNaCl>=1.5.0         # Ed25519 classical baseline benchmarks
 
 # Testing
 pytest>=7.4.0
-pytest-cov>=4.1.0
+pytest-cov>=4.1.0     # Coverage reporting
 
-# Dev utilities
-python-dotenv>=1.0.0
+# Dev / environment
+python-dotenv>=1.0.0  # .env loading for MOCK_PQC and similar flags
+
+# ─────────────────────────────────────────────────────────────────
+# stdlib modules used (NOT pip-installable, listed for reference):
+#   statistics  — built-in since Python 3.4
+#   hashlib     — built-in
+#   heapq       — built-in
+#   tracemalloc — built-in (benchmarks/bench.py)
+#   argparse    — built-in
+#   csv         — built-in
+#   math        — built-in
+# ─────────────────────────────────────────────────────────────────

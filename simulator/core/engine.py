@@ -1,6 +1,45 @@
-"""Discrete Event Simulation engine for blockchain network propagation.
+"""Discrete Event Simulation (DES) engine for blockchain network propagation.
 
-DESIGN NOTES:
+ENGINE HIERARCHY
+================
+This codebase has TWO engine classes with a strict parent/child relationship:
+
+  simulator.core.engine        → DESEngine  (Phase 1 — propagation only)
+  simulator.core.phase2_engine → Phase2Engine  (Phase 2/3 — extends DESEngine)
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  DESEngine  (this file)                                                 │
+│  ─────────────────────────────────────────────────────────────────────  │
+│  • Heapq-based analytical event loop (SLOT_TICK → BLOCK_PROPOSED →     │
+│    BLOCK_PROPAGATED → BLOCK_RECEIVED → BLOCK_VALIDATED)                 │
+│  • NIC-contention model, CPU-core scheduling, chain-specific routing    │
+│  • Returns: SimulationResult (propagation, stale rate, TPS)             │
+│  • Use for: propagation-only runs, calibration baselines, new modules   │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │  Phase2Engine WRAPS DESEngine via composition.
+                        │  It constructs a DESEngine internally and
+                        │  monkey-patches _create_block and
+                        │  _handle_block_received at runtime.
+                        ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Phase2Engine  (simulator/core/phase2_engine.py)                        │
+│  ─────────────────────────────────────────────────────────────────────  │
+│  • SimPy-compatible stochastic Poisson transaction arrivals             │
+│  • GlobalMempool with fee-rate eviction (bounded at 100 MB)             │
+│  • Heterogeneous blocks (mixed classical + PQC algorithm fractions)     │
+│  • Per-transaction verification with CPU resource locking               │
+│  • Phase G: DynamicFeeMarket, vote transaction overhead (Solana)        │
+│  • Returns: Dict (all Phase 1 metrics + verification + mempool + fees)  │
+│  • Use for: Monte Carlo sweeps, sensitivity analysis, fee experiments   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+WHEN TO USE WHICH
+─────────────────
+• DESEngine alone       — calibration, propagation impact, new module integration tests
+• Phase2Engine          — pqc_fraction sweeps, mempool dynamics, fee market experiments
+• Both engines          — DualSigConfig.sim_configs() feeds Phase2Config for migration runs
+
+DESIGN NOTES
 
 1. BANDWIDTH MODEL:
    - Propagation delay is computed analytically from block size, link bandwidth,
