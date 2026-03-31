@@ -121,7 +121,7 @@ class DynamicFeeMarket:
         elif self.config.fee_model == "first_price":
             self._update_first_price()
         elif self.config.fee_model == "priority_fee":
-            self._update_priority_fee(mempool_utilization)
+            self._update_priority_fee(mempool_utilization, block_utilization)
         else:
             self._update_eip1559(block_utilization)
 
@@ -162,21 +162,40 @@ class DynamicFeeMarket:
             # Decay toward floor
             self.base_fee *= 0.95
 
-    def _update_priority_fee(self, mempool_utilization: float) -> None:
-        """Solana priority fee: adjusts based on mempool pressure.
+    def _update_priority_fee(
+        self,
+        mempool_utilization: float,
+        block_utilization: float = 1.0,
+    ) -> None:
+        """Solana priority fee: adjusts based on BLOCK pressure (primary) and
+        mempool pressure (secondary).
 
-        More aggressive than EIP-1559 because Solana has shorter slots.
+        Previous implementation used only mempool_utilization, but the Solana
+        mempool (100 MB) and block (6 MB) are on very different scales.  With a
+        barely-used 100 MB mempool, mempool_utilization ≈ 0, yet every block may
+        be full.  Using only mempool_utilization caused fees to DECAY when blocks
+        were full — the opposite of intended behaviour.
+
+        Fix: use block_utilization as the primary pressure signal (matching
+        EIP-1559's approach).  Mempool pressure provides a secondary signal for
+        sustained demand that has not yet been included in blocks.
         """
         target = self.config.target_utilization
         if target <= 0:
             return
 
-        pressure = mempool_utilization / target
+        # Block pressure is the primary signal
+        block_pressure = block_utilization / target
+        # Mempool pressure is a secondary signal (dampened by 0.3×)
+        mempool_pressure = (mempool_utilization / target) * 0.3
+        # Combined pressure: weighted blend
+        pressure = max(block_pressure, mempool_pressure)
+
         if pressure > 1.0:
-            # Mempool over target → fee increases
+            # Over-pressure → fee increases
             self.base_fee *= (1.0 + self.config.adjustment_speed * min(pressure - 1.0, 2.0))
         else:
-            # Mempool under target → fee decreases
+            # Under-pressure → fee decreases
             self.base_fee *= (1.0 - self.config.adjustment_speed * (1.0 - pressure) * 0.5)
 
     def generate_tx_fee(self, tx_size_bytes: int, is_pqc: bool = False) -> int:
@@ -261,6 +280,9 @@ class DynamicFeeMarket:
                 else 0.0
             ),
             "avg_fee_paid": sum(fees) / len(fees) if fees else 0.0,
-            "median_fee_paid": sorted(fees)[len(fees) // 2] if fees else 0.0,
+            "median_fee_paid": (
+                sorted(fees)[len(fees) // 2] if len(fees) % 2 == 1
+                else (sorted(fees)[len(fees)//2 - 1] + sorted(fees)[len(fees)//2]) / 2.0
+            ) if fees else 0.0,
             "total_fee_checks": self._total_fee_checks,
         }

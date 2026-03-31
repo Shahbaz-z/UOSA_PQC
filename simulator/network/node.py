@@ -144,7 +144,18 @@ class Node:
             # Unknown algorithm: use conservative estimate (500 us/sig)
             base_time_us = 500.0 * num_signatures
         else:
-            base_time_us = profile.verify_time_us * num_signatures
+            # Apply batch_speedup for algorithms that support it (Ed25519: 0.5×,
+            # Schnorr: 0.4×).  Validators batch-verify all signatures in a block
+            # using Bos-Coster / Pippenger algorithms, cutting Ed25519 verify time
+            # by ~2×.  Without this, Phase 1 verification times are 2× higher than
+            # Phase 2 for Ed25519, creating an inconsistency in the two-engine model.
+            # Reference: libsodium batch verify, dalek batch_verify
+            verify_us = (
+                profile.verify_time_us * profile.batch_speedup
+                if profile.batch_speedup < 1.0
+                else profile.verify_time_us
+            )
+            base_time_us = verify_us * num_signatures
 
         # Adjust for processing power (higher factor = faster)
         adjusted_time_us = base_time_us / self.config.processing_power_factor

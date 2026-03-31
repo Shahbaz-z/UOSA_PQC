@@ -311,11 +311,12 @@ class TestPhase2VerifyConsistency:
         phase2_ed = engine._compute_heterogeneous_verify_time(block_ed, node)
         phase1_ed  = node.verification_time_ms("Ed25519", 10)
 
-        # Phase 2 applies batch_speedup (0.5× for Ed25519) → should be half of Phase 1
+        # Fix 6: verification_time_ms now also applies batch_speedup consistently.
+        # Both Phase 1 and Phase 2 apply batch_speedup, so they should now agree.
         ed_profile = VERIFICATION_PROFILES["Ed25519"]
-        assert phase2_ed == pytest.approx(phase1_ed * ed_profile.batch_speedup, rel=0.01), (
-            f"Phase2 Ed25519 ({phase2_ed:.4f} ms) should equal Phase1 ({phase1_ed:.4f} ms) × "
-            f"batch_speedup ({ed_profile.batch_speedup})"
+        assert phase2_ed == pytest.approx(phase1_ed, rel=0.01), (
+            f"Phase2 Ed25519 ({phase2_ed:.4f} ms) should equal Phase1 ({phase1_ed:.4f} ms) "
+            f"since both now apply batch_speedup ({ed_profile.batch_speedup})"
         )
 
         # For non-batch algorithms (ML-DSA: batch_speedup=1.0), Phase2 and Phase1 agree

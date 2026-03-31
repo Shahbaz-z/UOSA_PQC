@@ -26,6 +26,7 @@ References:
 
 from __future__ import annotations
 
+
 import math
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional
@@ -326,9 +327,21 @@ class MigrationTimeline:
     def phases(self) -> List[MigrationPhase]:
         """Generate the list of simulation phases.
 
+        Lazily cached in self._phases_cache: calling phases() multiple times
+        (e.g. from peak_overhead_phase() and congestion_spike_summary()) returns
+        the cached list after the first call.  With phase_resolution=50+ this
+        avoids redundant O(resolution) recomputation in tight loops.
+        functools.cache cannot be used here because MigrationTimeline is a
+        mutable dataclass (not hashable); we use a simple instance cache instead.
+        
+
         Returns:
             List of MigrationPhase objects in chronological order.
         """
+        # Return cached result if available
+        if hasattr(self, "_phases_cache"):
+            return self._phases_cache  # type: ignore[attr-defined]
+
         cfg = self.dual_sig_config
         phases: List[MigrationPhase] = []
 
@@ -384,6 +397,7 @@ class MigrationTimeline:
             avg_pk_bytes = float(cfg.pqc_pk_size()),
         ))
 
+        self._phases_cache = phases  # type: ignore[attr-defined]
         return phases
 
     def peak_overhead_phase(self) -> MigrationPhase:
@@ -434,7 +448,11 @@ class MigrationTimeline:
         Yields:
             Dict with phase metadata + simulation parameters.
         """
+        seen_start_blocks: set = set()
         for phase in self.phases():
+            if phase.start_block in seen_start_blocks:
+                continue
+            seen_start_blocks.add(phase.start_block)
             yield {
                 "chain":           base_chain,
                 "phase_name":      phase.phase_name,

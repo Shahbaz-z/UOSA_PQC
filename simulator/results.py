@@ -37,7 +37,13 @@ class SimulationResult:
     max_propagation_ms: float = 0.0
 
     # Stale/orphan metrics
-    stale_rate: float = 0.0  # Fraction of blocks with p90 > threshold
+    # stale_rate: fraction of blocks where p90 propagation > 90% of block_time_ms.
+    # TERMINOLOGY NOTE: this is a PROPAGATION CONGESTION RATE, not the true
+    # blockchain orphan/stale rate (which requires a fork-choice model).  A block
+    # is flagged here when its 90th-percentile propagation latency suggests the
+    # network would be at risk of seeing a competing block win.  Results should
+    # be labelled "near-stale rate" or "propagation congestion rate" in papers.
+    stale_rate: float = 0.0
     orphan_count: int = 0
 
     # Network metrics

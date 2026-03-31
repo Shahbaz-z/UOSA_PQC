@@ -105,18 +105,28 @@ def sample_full_node_config(
 
     Full nodes tend to have more modest hardware than validators.
     """
-    # Full nodes are typically home or light cloud
+    # Full nodes are predominantly home users with residential internet.
+    # Previous implementation sampled from the lower half of the cloud tier
+    # bandwidth range ([500, 1250] Mbps upload), which is 10-50× higher than
+    # a typical residential full node (~10-50 Mbps upload).
+    # Fix: 70% sample the home tier directly; 30% sample cloud (hosted full nodes).
+    # Sources: Ethernodes.org survey (2024), Bitcoin Core hardware requirements
     tiers = ["home", "cloud"]
-    weights = [0.6, 0.4]  # 60% home, 40% cloud
+    weights = [0.70, 0.30]  # 70% residential, 30% cloud-hosted
     tier = rng.choices(tiers, weights=weights)[0]
 
     spec = VALIDATOR_TIERS[tier]
 
-    # Sample with lower end of ranges
-    upload = rng.uniform(spec["upload_mbps"][0], sum(spec["upload_mbps"]) / 2)
-    download = rng.uniform(spec["download_mbps"][0], sum(spec["download_mbps"]) / 2)
-    cores = rng.randint(spec["cpu_cores"][0], (spec["cpu_cores"][0] + spec["cpu_cores"][1]) // 2)
-    processing = rng.uniform(spec["processing_factor"][0], sum(spec["processing_factor"]) / 2)
+    # Sample the lower third of the tier's bandwidth range for full nodes
+    # (full nodes have lower hardware requirements than validators)
+    upload_cap   = spec["upload_mbps"][0]   + (spec["upload_mbps"][1]   - spec["upload_mbps"][0])   / 3
+    download_cap = spec["download_mbps"][0] + (spec["download_mbps"][1] - spec["download_mbps"][0]) / 3
+    upload    = rng.uniform(spec["upload_mbps"][0],   upload_cap)
+    download  = rng.uniform(spec["download_mbps"][0], download_cap)
+    cores     = rng.randint(spec["cpu_cores"][0], (spec["cpu_cores"][0] + spec["cpu_cores"][1]) // 2)
+    processing = rng.uniform(spec["processing_factor"][0],
+                             spec["processing_factor"][0]
+                             + (spec["processing_factor"][1] - spec["processing_factor"][0]) / 2)
 
     return NodeConfig(
         node_id=node_id,

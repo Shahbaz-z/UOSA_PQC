@@ -61,10 +61,25 @@ class Block:
     total_signatures: int = field(default=0, init=False)
 
     def __post_init__(self):
-        """Compute size and signature count from transactions."""
+        """Compute size and signature count from transactions.
+
+        FRAGILITY NOTE: size_bytes and total_signatures are computed here from
+        self.transactions (a mutable list).  If transactions are appended after
+        construction, these fields will silently become stale.  No current code
+        path mutates block.transactions after construction, but if this changes,
+        call block._recompute_size() explicitly.
+        """
         if self.transactions:
             self.size_bytes = sum(tx.size_bytes for tx in self.transactions)
             self.total_signatures = sum(tx.num_signatures for tx in self.transactions)
+
+    def _recompute_size(self) -> None:
+        """Recompute size_bytes and total_signatures from current transactions.
+
+        Call this if transactions are added after construction.
+        """
+        self.size_bytes       = sum(tx.size_bytes    for tx in self.transactions)
+        self.total_signatures = sum(tx.num_signatures for tx in self.transactions)
 
     @property
     def tx_count(self) -> int:

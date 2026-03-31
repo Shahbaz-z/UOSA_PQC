@@ -36,6 +36,8 @@ CRITICAL PHYSICS CONSTRAINT
 
 from __future__ import annotations
 
+import sys
+
 import logging
 import random
 from dataclasses import dataclass, field
@@ -245,9 +247,12 @@ class Phase2Engine:
                     if effective_bw > 0:
                         size_megabits = (block.size_bytes * 8) / 1_000_000
                         tx_time_ms = (size_megabits / effective_bw) * 1000
+                        # Two geo_latency legs: request (peer→sender) + response download
                         retrieval_time = (
                             self._engine.state.current_time_ms
-                            + geo_latency + tx_time_ms
+                            + geo_latency   # announcement → peer
+                            + geo_latency   # request leg: peer → sender
+                            + tx_time_ms    # full block download
                         )
                         self._engine.state.schedule_event(
                             time_ms=retrieval_time,
@@ -429,7 +434,13 @@ class Phase2Engine:
         - Algorithm: Ed25519 (always classical)
         - Priority: Very high (must be included)
         """
-        VOTE_TX_SIZE = 1232  # Compressed vote tx
+        # Use vote_tx_size("Ed25519") from solana_specific.py (= 226 bytes).
+        # The previous value of 1,232 bytes was the Solana max packet size
+        # (SOLANA_MAX_TX_SIZE), not the vote transaction size. Actual Solana
+        # vote txs are ~215-250 bytes (base=130 + sig=64 + pk=32).
+        # Source: https://docs.solana.com/consensus/vote-transactions
+        from simulator.chains.solana_specific import DEFAULT_SOLANA_TX_MODEL as _sol_model
+        VOTE_TX_SIZE = _sol_model.vote_tx_size("Ed25519")  # = 226 bytes
         VOTE_FEE = 100_000  # High priority — votes must be included
 
         # Number of vote txs per interval = num_validators * fraction
@@ -462,11 +473,11 @@ class Phase2Engine:
 
         # For mempool selection we use byte size (propagation size)
         # The capacity constraint is chain-specific but mempool stores byte-sized txs
-        # Use a generous but semantically meaningful max_txs cap.
-        # The byte budget (max_block_size) is the real constraint; 10,000 txs
-        # is an upper bound that prevents passing the block size in bytes as a
-        # transaction count (e.g. 6,000,000 for Solana) which is misleading.
-        max_txs = 10_000
+        # Remove the tx-count cap: the byte budget is the real constraint.
+        # A cap of 10,000 txs would prematurely cut Solana blocks at half-capacity
+        # for small PQC transactions (~300 bytes each: 6 MB / 300 B = 20,000 txs).
+        # Use sys.maxsize so only the byte budget binds.
+        max_txs = sys.maxsize
 
         # Select transactions from mempool
         candidates = self._mempool.get_block_candidates(
@@ -639,6 +650,11 @@ class Phase2Engine:
         verification_failures = sum(
             1 for v in self._verification_times_ms if v > block_time_ms
         )
+        # NOTE: _verification_times_ms has one entry per BLOCK_RECEIVED event
+        # handled by patched_handle_received (once per block per receiving node).
+        # This rate = fraction of block-receipt events where heterogeneous
+        # verification exceeded the block time.  It is an upper-bound proxy for
+        # the "verification bottleneck" risk, NOT (failures / (blocks × nodes)).
         verification_failure_rate = (
             verification_failures / len(self._verification_times_ms)
             if self._verification_times_ms
@@ -689,7 +705,16 @@ class Phase2Engine:
         }
 
     def _compute_fee_market_metrics(self) -> Dict:
-        """Compute fee market metrics for results."""
+        """Compute fee market metrics for results.
+
+        IMPORTANT: economic_failure_count and economic_failure_rate are
+        authoritative from Phase2Engine._economic_rejections (incremented in
+        _generate_transactions_until when check_acceptable() returns False).
+        DynamicFeeMarket.metrics() also contains these fields, but they use
+        a different denominator (_total_fee_checks, not _total_tx_generated).
+        We replace the fee market's versions with Phase2Engine's to avoid
+        confusion and double-counting.
+        """
         if self._fee_market is None:
             return {
                 "fee_market_enabled": False,
@@ -698,6 +723,11 @@ class Phase2Engine:
             }
 
         fm_metrics = self._fee_market.metrics()
+        # Remove the fee market's internal economic_failure fields; replace with
+        # Phase2Engine's authoritative counts (correct denominator: total_tx_generated).
+        fm_metrics.pop("economic_failure_count", None)
+        fm_metrics.pop("economic_failure_rate", None)
+        fm_metrics["fee_market_enabled"] = True
         fm_metrics["economic_failure_count"] = self._economic_rejections
         fm_metrics["economic_failure_rate"] = (
             self._economic_rejections / self._total_tx_generated
