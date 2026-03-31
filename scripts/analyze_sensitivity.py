@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Comparative analysis of the three sweep datasets for the sensitivity analysis."""
 
+
+import sys
+import os
+from pathlib import Path
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+os.chdir(_project_root)
 import pandas as pd
 import numpy as np
 

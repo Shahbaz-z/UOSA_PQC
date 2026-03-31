@@ -20,6 +20,12 @@ import argparse
 import csv
 import os
 import sys
+import os
+from pathlib import Path
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+os.chdir(_project_root)
 import time
 from dataclasses import asdict, fields
 from pathlib import Path

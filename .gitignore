@@ -6,3 +6,8 @@ dist/
 build/
 .env
 benchmarks/results/*.csv
+
+# Office documents (keep out of version control)
+*.docx
+*.xlsx
+PQC Sol Report*
