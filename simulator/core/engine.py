@@ -77,6 +77,7 @@ from simulator.network.propagation import Block, Transaction
 from simulator.network.routing import (
     RoutingStrategy,
     GossipRouting,
+    TurbineRouting,
     get_routing_strategy,
 )
 from simulator.chains.base import get_chain_config, ChainConfig
@@ -199,6 +200,7 @@ class DESEngine:
                 region=region,
                 rng=self.rng,
                 is_validator=True,
+                chain=self.config.chain,  # BUG-H: Solana uses 300 Mbps floor
             )
             node = Node(node_config, env=None)
             self.topology.add_node(node)
@@ -365,10 +367,11 @@ class DESEngine:
         # https://docs.solana.com/consensus/turbine-block-propagation
         propagation_layer = event.payload.get("propagation_layer", 0)
         turbine_layer_delay_ms = 0.0
+        # BUG-G FIX: use isinstance instead of string class-name comparison.
+        # __class__.__name__ silently fails for TurbineRouting subclasses.
         if (
             propagation_layer > 0
-            and hasattr(self, "routing")
-            and self.routing.__class__.__name__ == "TurbineRouting"
+            and isinstance(getattr(self, "routing", None), TurbineRouting)
         ):
             # 10ms per hop beyond layer 0 (intra-datacenter forwarding overhead)
             turbine_layer_delay_ms = propagation_layer * 10.0

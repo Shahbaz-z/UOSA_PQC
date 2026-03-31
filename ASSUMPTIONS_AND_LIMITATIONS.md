@@ -250,3 +250,63 @@ Each archetype has three key parameters: `max_fee_ratio` (fraction of tx value t
 **Implication:** Viability thresholds (`MAX_FEE_FRACTION`) are static per-type constants, not drawn from an agent-preference distribution. The module answers "at a given fee rate, which transaction types are economically irrational?" rather than "what fraction of agents will stop submitting?" The two questions are complementary — the agent model answers the latter.
 
 **`TYPICAL_TX_VALUES_USD` sourcing:** Dust threshold ($0.01 BTC) is derived from Bitcoin Core's `GetDustThreshold()` at a 3 sat/vbyte relay fee rate and a \$60,000 BTC price. Ethereum and Solana values are informed by Dune Analytics median transaction size distributions (2024) and should be treated as representative order-of-magnitude figures, not market-surveyed medians.
+
+---
+
+## 10. Solana Engineer Review Fixes (Post-Phase 4)
+
+### 10.1 Falcon-512 CU Cost Ordering — ✅ FIXED (BUG-B)
+
+**Previous inconsistency:** `CU_COSTS["Falcon-512"] = 2,500` and `CU_COSTS["ML-DSA-44"] = 5,000` in `solana_specific.py` implied Falcon-512 is twice as fast to verify on Solana as ML-DSA-44. This contradicts `blockchain/verification.py`, which correctly assigns Falcon-512 = 250 µs and ML-DSA-44 = 180 µs based on OQS Skylake benchmarks (Falcon-512 ~125 µs, ML-DSA-44 ~54 µs; simulator values include 2.5–3.3× conservative margins). Falcon's advantage is signature **size** (666 B vs 2,420 B), not verification speed.
+
+**Fix:** `CU_COSTS["Falcon-512"]` updated to 6,500 CU and `CU_COSTS["Falcon-1024"]` to 11,000 CU, restoring the correct ordering: Falcon-512 > ML-DSA-44 in both wall-clock time and compute units. Hybrid scheme entries updated accordingly. The SLH-DSA entries are unaffected and remain correct.
+
+**Impact on prior results:** The CU saturation analysis in `SolanaTxModel.block_capacity_analysis` is a standalone analytical path not used by the DES engine. DES simulation results are unaffected. The corrected CU ordering means Falcon-512 is now correctly identified as *more* CU-intensive than ML-DSA-44 for Solana vote verification — a non-obvious but physically correct result.
+
+### 10.2 Agent Model Requires Fee Market — ✅ FIXED (BUG-C)
+
+**Previous behaviour:** `Phase2Config(use_agent_demand_model=True, fee_market_enabled=False)` silently constructed an `AgentPool` but never consulted it. The agent modulation block was gated on `self._fee_market is not None`, so demand feedback was completely absent without a runtime error or warning.
+
+**Fix:** `Phase2Engine.__init__` now raises `ValueError` immediately when `use_agent_demand_model=True` and `fee_market_enabled=False`. The error message explains why: the agent pool uses the current fee rate as its demand signal — without a fee market, there is no signal and the pool is useless.
+
+### 10.3 Block Size Constant Alignment — ✅ FIXED (BUG-E)
+
+**Previous inconsistency:** `solana_specific.py` used `BLOCK_SIZE_BYTES = 6,291,456` (6 MiB) while `base.py` and `chain_models.py` both used `6,000,000` (6 MB). The 4.7% difference caused `SolanaTxModel.block_capacity_analysis` to report slightly higher throughput figures than the DES engine.
+
+**Fix:** `solana_specific.py BLOCK_SIZE_BYTES` set to `6_000_000` to match both other constants. All three Solana block-capacity analysis paths now use the same value.
+
+### 10.4 TurbineRouting isinstance Check — ✅ FIXED (BUG-G)
+
+**Previous code:** `self.routing.__class__.__name__ == "TurbineRouting"` in `engine.py`. String comparison fails silently for any subclass of `TurbineRouting`.
+
+**Fix:** Replaced with `isinstance(getattr(self, "routing", None), TurbineRouting)`. `TurbineRouting` is now imported directly in `engine.py`.
+
+### 10.5 Turbine Bounded-Gossip Approximation — DOCUMENTED (BUG-D)
+
+**Limitation (not a bug in the simulation results):** The `TurbineRouting.plan_propagation` implementation is bounded-random gossip, not a deterministic shred tree. Real Turbine assigns each validator a fixed subtree via a PRNG seeded from the leader slot and shred index. The simulation's model — each sender selects `fanout` random recipients from all currently unseen nodes — is functionally correct for propagation coverage and hop count, but does not model the bandwidth concentration asymmetry between tree layers (layer-0 nodes bear 200× a leaf's load in a real tree).
+
+**Impact:** Propagation latency and coverage metrics are unaffected for the 75-node test network (fanout=200 ≥ 74 → one hop). For a 1,500-node production simulation, the tree degenerates to two hops regardless of whether the assignment is random or deterministic. Bandwidth concentration is understated at layer-0 nodes and overstated at leaves.
+
+A comment has been added to `TurbineRouting.plan_propagation` explicitly documenting this approximation.
+
+### 10.6 Solana Validator Bandwidth Floor — ✅ FIXED (BUG-H)
+
+**Previous issue:** The generic `VALIDATOR_TIERS["home"]` tier assigned 25–100 Mbps upload to 15% of validators. Solana's documented minimum hardware requirement is 300 Mbps upload ([Solana validator requirements](https://docs.solana.com/running-validator/validator-reqs)). Home-tier nodes below this threshold would be rejected from the network; modelling them inflates propagation delay estimates for the bottom quantile of Solana validators.
+
+**Fix:** A `SOLANA_VALIDATOR_TIERS` dict has been added to `simulator/models/bandwidth.py` overriding the home tier with `upload_mbps = (300, 600)` (300–600 Mbps, matching high-speed residential fibre / business connections). `sample_validator_config()` now accepts a `chain` parameter and selects `SOLANA_VALIDATOR_TIERS` when `chain="solana"`. The DES engine passes `chain=self.config.chain` to all validator node creation calls.
+
+**Impact:** Solana simulation runs will no longer create under-specced validator nodes. The practical effect on aggregate propagation metrics is small (only the bottom 15% of validators are affected, and they represent the home tier with disproportionately low stake weight), but it eliminates a known correctness issue.
+
+### 10.7 Vote Transaction Model Inconsistency — DOCUMENTED (BUG-A + BUG-I)
+
+**Three vote overhead models exist at different layers:**
+
+1. `blockchain/chain_models.analyze_solana_block_space`: fraction-based deduction (`block_size × (1 - vote_tx_pct)`) with `vote_tx_pct=0.0` default.
+2. `simulator/chains/solana_specific.SolanaTxModel.block_capacity_analysis`: individual-tx counting (`226 B × num_validators`).
+3. `simulator/core/phase2_engine._inject_vote_transactions`: actual vote transactions injected into the mempool at each slot tick (simulation ground truth).
+
+**Model 1 default overstates throughput:** With `vote_tx_pct=0.0`, `compare_all_solana()` ignores vote overhead entirely, overstating user-transaction throughput by ~3.3× relative to the realistic 70% vote scenario.
+
+**Resolution:** `compare_all_solana()` now includes a docstring warning explaining this default and directing callers to pass `vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC (0.70)` for paper-facing analysis. A full unification of the three models (removing Models 1 and 2 in favour of Model 3) is deferred as it would require restructuring the static analysis API.
+
+**Why 5.4% ≠ 75% mainnet:** The `SolanaTxModel` individual-tx model (`226 B × 1,500 validators = 339 KB = 5.4% of 6 MB`) appears to contradict the empirical 75% mainnet vote overhead. This is reconciled by noting that mainnet includes accumulated epoch-history vote account data in every block, not just the current slot's new attestations. The simulation correctly models only the current-slot vote transaction stream (226 B × N validators) — a deliberate simplification that is now explicitly documented here.

@@ -253,7 +253,26 @@ def compare_all_solana(
     num_signers: int = 1,
     vote_tx_pct: float = SOLANA_VOTE_TX_PCT_DEFAULT,
 ) -> ComparativeAnalysis:
-    """Run Solana block-space analysis for every signature scheme."""
+    """Run Solana block-space analysis for every signature scheme.
+
+    BUG-I NOTE — vote_tx_pct defaults to 0.0 (SOLANA_VOTE_TX_PCT_DEFAULT),
+    which omits vote-transaction block-space overhead entirely.  This overstates
+    Solana user-transaction throughput by ~3.3× relative to the realistic
+    scenario where votes consume ~70% of block space.  To model realistic
+    mainnet throughput, pass vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC (0.70).
+
+    BUG-A NOTE — Three inconsistent vote models exist in this codebase:
+      1. This function: fraction-based deduction (block_size × (1 - vote_tx_pct))
+      2. SolanaTxModel.block_capacity_analysis: individual-tx counting
+         (226 B × num_validators)
+      3. Phase2Engine._inject_vote_transactions: individual vote txs in mempool
+
+    The three models give different answers for the same vote overhead.  Model 3
+    (Phase2Engine) is the simulation ground truth.  Models 1 and 2 are static
+    analytical approximations.  For paper-facing throughput tables, use this
+    function with vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC to match the realistic
+    simulation scenario.
+    """
     analyses = [
         analyze_solana_block_space(sig, block_size, base_tx_overhead, slot_time_ms, num_signers, vote_tx_pct)
         for sig in SOLANA_SIG_TYPES

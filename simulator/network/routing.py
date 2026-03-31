@@ -186,6 +186,26 @@ class TurbineRouting(RoutingStrategy):
         k = min(self.fanout, len(available))
         children = available[:k]
 
+        # BUG-D NOTE — Bounded gossip approximation, not a deterministic tree:
+        # Real Turbine assigns each validator a fixed, deterministic position in
+        # the shred tree (a PRNG seed derived from leader slot and shred index).
+        # A layer-0 node transmits only to its assigned `fanout` children; those
+        # children transmit only to their own subtrees.  This bounds bandwidth
+        # concentration: layer-0 nodes bear 200× a leaf’s load, layer-1 nodes
+        # bear 200× of layer 2, etc.
+        #
+        # This implementation is bounded-random gossip: each sender selects
+        # `fanout` random recipients from ALL currently unseen nodes rather than
+        # from a fixed subtree.  This is functionally equivalent for propagation
+        # COVERAGE on small test networks (fanout ≥ n−1 → one hop) and produces
+        # the correct hop-count on larger networks, but it does NOT model the
+        # bandwidth concentration asymmetry between tree layers.
+        #
+        # Impact: the model understates per-node bandwidth at layer 0 and
+        # overstates it at leaf layers.  Propagation LATENCY and COVERAGE metrics
+        # are unaffected for the 75-node test network.
+        # See ASSUMPTIONS_AND_LIMITATIONS.md Section 7.6 for details.
+
         return [
             PropagationTask(
                 sender_id=sender.node_id,

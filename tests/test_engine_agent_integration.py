@@ -446,11 +446,14 @@ class TestPhase2ConfigAgentFields:
         assert cfg.agent_random_seed == 42
 
     def test_agent_pool_initialised_when_enabled(self):
-        """Phase2Engine._agent_pool should be non-None when model is enabled."""
+        """Phase2Engine._agent_pool should be non-None when model is enabled.
+        Agent model requires fee_market_enabled=True (BUG-C fix).
+        """
         from simulator.core.phase2_engine import Phase2Config, Phase2Engine
         cfg = Phase2Config(
             chain="solana",
             use_agent_demand_model=True,
+            fee_market_enabled=True,   # required by BUG-C guard
             agent_pool_size=20,
             **_QUICK,
         )
@@ -465,11 +468,14 @@ class TestPhase2ConfigAgentFields:
         assert engine._agent_pool is None
 
     def test_custom_seed_used_for_agent_pool(self):
-        """Agent pool should use agent_random_seed when non-zero."""
+        """Agent pool should use agent_random_seed when non-zero.
+        Agent model requires fee_market_enabled=True (BUG-C fix).
+        """
         from simulator.core.phase2_engine import Phase2Config, Phase2Engine
         cfg = Phase2Config(
             chain="solana",
             use_agent_demand_model=True,
+            fee_market_enabled=True,   # required by BUG-C guard
             agent_pool_size=20,
             agent_random_seed=99,
             **_QUICK,
@@ -477,3 +483,16 @@ class TestPhase2ConfigAgentFields:
         engine = Phase2Engine(cfg)
         # Confirm it ran without error and pool exists
         assert engine._agent_pool is not None
+
+    def test_agent_model_without_fee_market_raises(self):
+        """use_agent_demand_model=True without fee_market raises ValueError (BUG-C)."""
+        from simulator.core.phase2_engine import Phase2Config, Phase2Engine
+        cfg = Phase2Config(
+            chain="solana",
+            use_agent_demand_model=True,
+            fee_market_enabled=False,  # missing fee market
+            agent_pool_size=20,
+            **_QUICK,
+        )
+        with pytest.raises(ValueError, match="fee_market_enabled"):
+            Phase2Engine(cfg)

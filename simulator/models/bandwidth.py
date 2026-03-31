@@ -22,6 +22,13 @@ from simulator.network.node import NodeConfig
 # - Ethereum node surveys (ethernodes.org)
 # - Bitcoin node network analysis
 
+# BUG-H NOTE — Solana home-tier bandwidth floor:
+# Solana’s documented minimum hardware requirement is 300 Mbps upload.
+# The home tier below (25–100 Mbps) represents nodes that would fail
+# Solana’s requirements.  For Solana-specific simulations, the engine
+# should use SOLANA_VALIDATOR_TIERS (see below) which floors home-tier
+# upload at 300 Mbps.  This generic VALIDATOR_TIERS is retained for
+# Bitcoin/Ethereum runs where lower bandwidth is realistic.
 VALIDATOR_TIERS: Dict[str, Dict] = {
     "home": {
         "fraction": 0.15,  # 15% of validators are home operators
@@ -50,11 +57,30 @@ VALIDATOR_TIERS: Dict[str, Dict] = {
 }
 
 
+# BUG-H FIX — Solana-specific validator tiers:
+# Overrides the generic home tier to enforce Solana’s minimum 300 Mbps upload.
+# Source: https://docs.solana.com/running-validator/validator-reqs
+# "Validators need at least 300 Mbit/s symmetric networking."
+# Home-tier nodes below this threshold would be rejected by the network;
+# modelling them inflates propagation delay estimates for Solana.
+SOLANA_VALIDATOR_TIERS: Dict[str, Dict] = {
+    **VALIDATOR_TIERS,  # cloud and datacenter tiers unchanged
+    "home": {
+        **VALIDATOR_TIERS["home"],
+        # Raise floor to 300 Mbps (Solana minimum) — upper bound unchanged
+        "upload_mbps": (300, 600),      # 300–600 Mbps: high-speed residential / business fibre
+        "download_mbps": (500, 1000),
+        "cpu_cores": (8, 16),           # Minimum 12 cores recommended; floor at 8
+    },
+}
+
+
 def sample_validator_config(
     node_id: str,
     region: str,
     rng: random.Random,
     is_validator: bool = True,
+    chain: str = "",
 ) -> NodeConfig:
     """Sample a realistic validator configuration.
 
@@ -66,16 +92,22 @@ def sample_validator_config(
         region: Geographic region.
         rng: Random number generator for reproducibility.
         is_validator: Whether this node can propose blocks.
+        chain: Chain name ("solana" uses SOLANA_VALIDATOR_TIERS with 300 Mbps floor).
 
     Returns:
         NodeConfig with sampled hardware characteristics.
     """
+    # BUG-H FIX: Solana validators must meet a 300 Mbps minimum upload requirement.
+    # Use the Solana-specific tier table for Solana runs to avoid modelling
+    # sub-minimum nodes that would be rejected from the network.
+    tier_table = SOLANA_VALIDATOR_TIERS if chain.lower() == "solana" else VALIDATOR_TIERS
+
     # Select tier based on distribution
-    tiers = list(VALIDATOR_TIERS.keys())
-    weights = [VALIDATOR_TIERS[t]["fraction"] for t in tiers]
+    tiers = list(tier_table.keys())
+    weights = [tier_table[t]["fraction"] for t in tiers]
     tier = rng.choices(tiers, weights=weights)[0]
 
-    spec = VALIDATOR_TIERS[tier]
+    spec = tier_table[tier]
 
     # Sample within ranges (uniform distribution)
     upload = rng.uniform(*spec["upload_mbps"])

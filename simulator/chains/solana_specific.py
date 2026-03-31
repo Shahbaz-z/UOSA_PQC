@@ -50,7 +50,12 @@ VOTE_TX_BASE_BYTES: int = 130
 VOTE_TX_ED25519_SIZE: int = 226  # = VOTE_TX_BASE_BYTES(130) + sig(64) + pk(32)
 
 # Solana block size limits
-BLOCK_SIZE_BYTES: int = 6_291_456       # 6 MB practical limit (not 32 MB theoretical)
+# BUG-E FIX: Previously 6_291_456 (6 MiB) — now aligned with base.py (6_000_000)
+# and blockchain/chain_models.py (SOLANA_BLOCK_SIZE_BYTES = 6_000_000) so all
+# analytical and simulation paths report the same block-capacity numbers.
+# The difference is only 4.7% but caused throughput figures to differ between
+# SolanaTxModel.block_capacity_analysis() and the DES engine's block fills.
+BLOCK_SIZE_BYTES: int = 6_000_000       # 6 MB practical limit (matches base.py and chain_models.py)
 BLOCK_COMPUTE_UNIT_LIMIT: int = 48_000_000  # 48M CUs per block (mainnet cap)
 
 # Gulf Stream: forward txs to next N leaders
@@ -59,26 +64,42 @@ GULF_STREAM_LEADERS: int = 4
 # Compute unit costs per signature verification (estimated from cycle benchmarks)
 # Solana's runtime charges CUs for signature verification as part of tx processing.
 # Ed25519 program: https://docs.solana.com/developing/runtime-facilities/programs#ed25519-program
+# Compute unit costs per signature verification on Solana.
+#
+# Derivation: CU ≈ verify_time_µs × (CU/µs ratio).
+# The Solana runtime CU/µs calibration is ~10 CU/µs for Ed25519 (100 CU / 10 µs).
+# PQC CU costs are scaled by the same ratio from blockchain/verification.py times.
+#
+# OQS benchmark ordering (same Skylake hardware):
+#   Falcon-512  ≈ 125 µs verify  → SLOWER than ML-DSA-44 (54 µs)
+#   ML-DSA-44   ≈  54 µs verify  → fastest PQC candidate
+#
+# BUG-B FIX: Previous table had Falcon-512 = 2,500 CU < ML-DSA-44 = 5,000 CU,
+# implying Falcon is faster to verify on Solana.  This contradicts verification.py
+# which correctly assigns Falcon-512 = 250 µs > ML-DSA-44 = 180 µs (with safety margins).
+# CU_COSTS now reflects the same ordering: Falcon-512 > ML-DSA-44.
+#
+# Source: https://openquantumsafe.org/benchmarking/ (Intel Skylake, liboqs 0.10)
 CU_COSTS: Dict[str, int] = {
-    "Ed25519":      100,      # Solana native Ed25519 program cost
-    "ECDSA":        200,      # secp256k1 program (slightly heavier)
-    "ML-DSA-44":    5_000,    # estimated from ~83k cycles × (CU/cycle ratio)
-    "ML-DSA-65":    8_000,    # estimated
-    "ML-DSA-87":    12_000,   # estimated
-    "Falcon-512":   2_500,    # fast verify — ~42k cycles
-    "Falcon-1024":  4_500,    # ~75k cycles
-    "SLH-DSA-128s": 40_000,   # very slow: ~667k cycles
-    "SLH-DSA-128f":  3_500,   # fast variant: ~58k cycles
+    "Ed25519":      100,      # Solana native Ed25519 program: ~10 µs → 100 CU
+    "ECDSA":        200,      # secp256k1 program: ~20 µs → 200 CU
+    "ML-DSA-44":    5_000,    # ~54 µs × 10 + safety margin → ~5,000 CU
+    "ML-DSA-65":    8_000,    # ~87 µs × 10 + margin → ~8,000 CU
+    "ML-DSA-87":    12_000,   # ~140 µs × 10 + margin → ~12,000 CU
+    "Falcon-512":   6_500,    # ~125 µs × 10 + margin → ~6,500 CU (SLOWER than ML-DSA-44)
+    "Falcon-1024":  11_000,   # ~200 µs × 10 + margin → ~11,000 CU
+    "SLH-DSA-128s": 40_000,   # very slow: ~4,000 µs → 40,000 CU (unchanged — correct)
+    "SLH-DSA-128f":  3_500,   # fast variant: ~350 µs → 3,500 CU
     "SLH-DSA-192s": 65_000,
     "SLH-DSA-192f":  5_500,
     "SLH-DSA-256s": 95_000,
     "SLH-DSA-256f":  8_000,
-    # Hybrid schemes
+    # Hybrid schemes (Ed25519 + PQC: additive CU cost)
     "Hybrid-Ed25519+ML-DSA-44":   5_100,
     "Hybrid-Ed25519+ML-DSA-65":   8_100,
     "Hybrid-Ed25519+ML-DSA-87":  12_100,
-    "Hybrid-Ed25519+Falcon-512":  2_600,
-    "Hybrid-Ed25519+Falcon-1024": 4_600,
+    "Hybrid-Ed25519+Falcon-512":  6_600,
+    "Hybrid-Ed25519+Falcon-1024": 11_100,
 }
 
 

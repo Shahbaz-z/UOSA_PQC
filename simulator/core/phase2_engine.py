@@ -133,6 +133,18 @@ class Phase2Engine:
     """
 
     def __init__(self, config: Phase2Config) -> None:
+        # BUG-C FIX: Agent demand model requires the fee market to be enabled.
+        # When fee_market_enabled=False, self._fee_market is None and the agent
+        # modulation block (`if self._agent_pool is not None and self._fee_market
+        # is not None`) is never entered — the pool is constructed but never
+        # consulted, silently no-oping the demand model.
+        if config.use_agent_demand_model and not config.fee_market_enabled:
+            raise ValueError(
+                "use_agent_demand_model=True requires fee_market_enabled=True. "
+                "The agent demand model modulates transaction arrivals based on "
+                "the current fee market rate; without a fee market there is no "
+                "rate signal and the agent pool would be constructed but never used."
+            )
         self.config = config
         self.rng = random.Random(config.random_seed)
 
