@@ -90,8 +90,25 @@ class VerificationResult:
 #   - Schnorr BIP340: 60 µs (libsecp256k1, batch-friendly)
 #   - BLS12-381: 1,500 µs (pairing-based, eth2 consensus)
 #
-# Falcon (liboqs):
-#   - Falcon-512: ~100 µs, Falcon-1024: ~200 µs
+# Falcon (liboqs / OQS benchmarks):
+#   - Falcon-512 verify: ~100 µs on AVX2 (optimised, Intel Xeon)
+#                        ~125 µs on Skylake (OQS benchmarks, 7,963 ops/s)
+#                        ~600 µs on ARM without NEON
+#   - Falcon-1024 verify: ~170-200 µs on AVX2
+#
+#   CONSISTENCY NOTE: Falcon verify is SLOWER than ML-DSA-44 verify across all
+#   hardware in liboqs benchmarks (OQS: Falcon-512 ~125 µs vs ML-DSA-44 ~54 µs
+#   on same Skylake hardware).  Falcon's advantages are signature SIZE (666 B
+#   vs 2,420 B) and SIGNING SPEED — NOT verification speed.
+#
+#   Applying a consistent 2.5× conservative penalty (slightly lower than the
+#   3.3× applied to ML-DSA to reflect Falcon's more hardware-friendly NTT):
+#   Falcon-512:  ~100 µs × 2.5 → 250 µs
+#   Falcon-1024: ~170 µs × 2.5 → 425 µs (rounded to 400 µs)
+#
+#   This means Falcon-512 (250 µs) is SLOWER than ML-DSA-44 (180 µs) under
+#   the conservative model — matching real-world OQS benchmark ordering.
+#   The simulation impact is small (verify is never the bottleneck vs bandwidth).
 #
 # Batch speedup:
 #   - Ed25519: 0.5 (batch verification via Bos-Coster / Pippenger)
@@ -121,16 +138,21 @@ VERIFICATION_PROFILES: Dict[str, VerificationProfile] = {
     "SLH-DSA-256s": VerificationProfile("SLH-DSA-256s", 8640.0, 1.0, True),
     "SLH-DSA-256f": VerificationProfile("SLH-DSA-256f", 14850.0, 1.0, True),  # 2.5× SLH-DSA-128f (5,940 µs)
 
-    # Falcon (pending FN-DSA) -- fast verification is a key advantage
-    "Falcon-512": VerificationProfile("Falcon-512", 100.0, 1.0, True),
-    "Falcon-1024": VerificationProfile("Falcon-1024", 200.0, 1.0, True),
+    # Falcon (pending FN-DSA)
+    # Falcon's advantages are SIGNATURE SIZE (666 B) and SIGNING SPEED.
+    # Verification is NOT faster than ML-DSA-44 — see note above.
+    # 2.5× conservative penalty applied (consistent with ML-DSA conservative model).
+    # Falcon-512:  ~100 µs raw × 2.5 → 250 µs conservative
+    # Falcon-1024: ~170 µs raw × 2.5 → 425 µs, rounded to 400 µs
+    "Falcon-512": VerificationProfile("Falcon-512", 250.0, 1.0, True),
+    "Falcon-1024": VerificationProfile("Falcon-1024", 400.0, 1.0, True),
 
     # Hybrids: sum of both verification times
     "Hybrid-Ed25519+ML-DSA-44": VerificationProfile("Hybrid-Ed25519+ML-DSA-44", 60.0 + 180.0, 1.0, True),
     "Hybrid-Ed25519+ML-DSA-65": VerificationProfile("Hybrid-Ed25519+ML-DSA-65", 60.0 + 300.0, 1.0, True),
     "Hybrid-Ed25519+ML-DSA-87": VerificationProfile("Hybrid-Ed25519+ML-DSA-87", 60.0 + 500.0, 1.0, True),
-    "Hybrid-Ed25519+Falcon-512": VerificationProfile("Hybrid-Ed25519+Falcon-512", 60.0 + 100.0, 1.0, True),
-    "Hybrid-Ed25519+Falcon-1024": VerificationProfile("Hybrid-Ed25519+Falcon-1024", 60.0 + 200.0, 1.0, True),
+    "Hybrid-Ed25519+Falcon-512": VerificationProfile("Hybrid-Ed25519+Falcon-512", 60.0 + 250.0, 1.0, True),
+    "Hybrid-Ed25519+Falcon-1024": VerificationProfile("Hybrid-Ed25519+Falcon-1024", 60.0 + 400.0, 1.0, True),
 }
 
 

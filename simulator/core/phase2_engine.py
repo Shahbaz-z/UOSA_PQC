@@ -175,6 +175,14 @@ class Phase2Engine:
         self._vote_txs_generated: int = 0
         self._vote_bytes_total: int = 0
 
+        # Slot time tracking for accurate inter-slot interval calculation.
+        # IMPORTANT: patched_handle_slot must use the ACTUAL elapsed interval
+        # (current_time - last_slot_time), NOT the nominal block_time_ms constant.
+        # Using the nominal constant systematically overcounts transactions when
+        # actual slot intervals are longer than block_time_ms (e.g. due to
+        # propagation delays and queued events shifting slot boundaries).
+        self._last_slot_time_ms: float = 0.0
+
         # Metrics accumulators
         self._blocks_produced: List[Block] = []
         self._total_evictions: int = 0
@@ -189,7 +197,10 @@ class Phase2Engine:
             Dictionary with comprehensive simulation results including
             propagation, verification, mempool, and failure metrics.
         """
-        # Pre-fill mempool with transactions arriving before first block
+        # Pre-fill mempool with transactions arriving before the first block.
+        # Set _last_slot_time_ms to 0.0 so the first patched_handle_slot computes
+        # the actual elapsed interval correctly rather than double-counting.
+        self._last_slot_time_ms = 0.0
         self._generate_transactions_until(self._engine.block_time_ms)
 
         # Run the event loop with Phase 2 overrides
@@ -238,16 +249,33 @@ class Phase2Engine:
         original_handle_slot = self._engine._handle_slot_tick
 
         def patched_handle_slot(event: Event) -> None:
-            # Generate transactions that arrived during this slot interval
-            self._generate_transactions_until(
-                self._engine.block_time_ms
+            # Compute the ACTUAL elapsed time since the previous slot tick.
+            # Using the nominal block_time_ms constant here would be incorrect:
+            # in a stochastic DES the time between slot events can exceed the
+            # nominal block time (e.g. due to propagation delays, queued events,
+            # or sub-ms floating-point rounding in the heapq scheduler).
+            # Passing the nominal constant causes the mempool to be refilled
+            # with a full interval's worth of transactions every slot even when
+            # less time has actually elapsed, systematically overcounting
+            # total_tx_generated and inflating eviction rates.
+            current_time = self._engine.state.current_time_ms
+            actual_interval_ms = max(
+                0.0, current_time - self._last_slot_time_ms
             )
+            # Fall back to nominal interval on the very first slot (where
+            # last_slot_time_ms == 0.0 and current_time == 0.0)
+            if actual_interval_ms == 0.0:
+                actual_interval_ms = self._engine.block_time_ms
+            self._last_slot_time_ms = current_time
+
+            self._generate_transactions_until(actual_interval_ms)
+
             # Phase G: Update fee market after each block
             if self._fee_market is not None:
                 mempool_util = self._mempool.utilization
                 block_util = 1.0  # Assume full blocks for now
                 self._fee_market.update_base_fee(
-                    current_time_ms=self._engine.state.current_time_ms,
+                    current_time_ms=current_time,
                     mempool_utilization=mempool_util,
                     block_utilization=block_util,
                 )

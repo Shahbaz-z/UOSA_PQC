@@ -118,6 +118,41 @@ class TestCalibrationRunner:
             if not math.isnan(err):
                 assert err > 100  # 400% error
 
+    def test_nan_simulated_value_fails_calibration(self):
+        """NaN simulated values must FAIL calibration, not silently pass.
+
+        Bug: Python's `nan > tolerance` evaluates to False, which caused
+        passes_calibration() to return True for metrics where the simulated
+        value was float('nan') (e.g. fee/bandwidth metrics not available
+        from basic DES runs).
+        """
+        runner = CalibrationRunner("bitcoin")
+        # Mix of good value (stale_rate passes) and NaN (should fail)
+        mixed = {m: float('nan') for m in CALIBRATION_TARGETS["bitcoin"]}
+        mixed["stale_rate"] = CALIBRATION_TARGETS["bitcoin"]["stale_rate"][0]
+        # NaN metrics must cause failure
+        assert runner.passes_calibration(mixed, tolerance=0.20) is False
+
+    def test_nan_simulated_value_not_silently_passed(self):
+        """MetricResult with NaN simulated value should have inf relative_error."""
+        result = MetricResult.compute("fee", target=20.0, simulated=float('nan'), tolerance=0.60)
+        assert math.isinf(result.relative_error), (
+            "NaN simulated value should produce inf relative_error, not nan"
+        )
+        assert result.passed is False
+
+    def test_overall_error_pct_excludes_inf(self):
+        """overall_error_pct should not return NaN when some metrics have inf error."""
+        runner = CalibrationRunner("bitcoin")
+        # Mix: some metrics good, others NaN (which become inf after fix)
+        good_val = {m: t for m, (t, _) in CALIBRATION_TARGETS["bitcoin"].items()}
+        good_val["median_fee_sat_vbyte"] = float('nan')  # not available from DES
+        result = runner.run_classical_baseline(simulated=good_val)
+        # overall_error_pct should be a finite number (excludes the inf metric)
+        assert math.isfinite(result.overall_error_pct), (
+            f"overall_error_pct should be finite, got {result.overall_error_pct}"
+        )
+
     def test_passes_calibration_with_targets(self):
         runner = CalibrationRunner("ethereum")
         perfect = {m: t for m, (t, _) in CALIBRATION_TARGETS["ethereum"].items()}

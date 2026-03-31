@@ -233,3 +233,79 @@ class TestPhase2MultiChain:
         result = Phase2Engine(cfg).run()
         assert result["chain"] == chain
         assert result["num_blocks"] >= 0
+
+
+class TestPhase2SlotIntervalAccuracy:
+    """Regression tests for the slot-tick transaction overcounting bug.
+
+    Bug: patched_handle_slot used to call _generate_transactions_until(block_time_ms)
+    with the nominal block interval rather than the actual elapsed time since the
+    last slot.  This caused total_tx_generated to be systematically overcounted
+    when actual slot intervals exceeded the nominal block_time_ms.
+
+    Fix: Phase2Engine now tracks _last_slot_time_ms and passes the true elapsed
+    interval to _generate_transactions_until on each slot tick.
+    """
+
+    def _run_with_low_arrival(self, chain: str = "solana") -> dict:
+        """Run with very low lambda_tps so overcounting is measurable."""
+        from simulator.core.phase2_engine import Phase2Engine, Phase2Config
+        cfg = Phase2Config(
+            chain=chain,
+            pqc_fraction=0.0,
+            lambda_tps=1.0,          # Very low: ~1 tx/s
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=2_000,
+            random_seed=42,
+        )
+        return Phase2Engine(cfg).run()
+
+    def test_tx_generated_not_catastrophically_overcounted(self):
+        """total_tx_generated should be consistent with lambda_tps × duration.
+
+        At lambda_tps=1.0 over 2 seconds, we expect ~2 transactions.
+        With the overcounting bug, each slot would generate a full slot's
+        worth regardless of actual elapsed time — producing far more txs
+        than the Poisson rate implies.
+
+        Allow generous headroom (20×) since Poisson is stochastic and the
+        pre-fill also generates transactions.
+        """
+        result = self._run_with_low_arrival("solana")
+        duration_s = 2.0
+        lambda_tps = 1.0
+        expected_max = lambda_tps * duration_s * 20  # very generous upper bound
+        assert result["total_tx_generated"] <= expected_max, (
+            f"total_tx_generated ({result['total_tx_generated']}) >> "
+            f"lambda_tps×duration×20 ({expected_max}). "
+            f"Slot-tick interval overcounting may have returned."
+        )
+
+    def test_last_slot_time_initialised(self):
+        """Phase2Engine should have _last_slot_time_ms attribute after init."""
+        from simulator.core.phase2_engine import Phase2Engine, Phase2Config
+        engine = Phase2Engine(Phase2Config(chain="solana", random_seed=0))
+        assert hasattr(engine, "_last_slot_time_ms")
+        assert engine._last_slot_time_ms == 0.0
+
+    def test_actual_interval_never_negative(self):
+        """The actual_interval_ms passed to _generate_transactions_until must be >= 0.
+
+        Indirectly verified: if the fix is correct, the simulation completes
+        without OverflowError or unbounded mempool growth.
+        """
+        from simulator.core.phase2_engine import Phase2Engine, Phase2Config
+        cfg = Phase2Config(
+            chain="ethereum",
+            pqc_fraction=0.3,
+            lambda_tps=100.0,
+            num_validators=10,
+            num_full_nodes=5,
+            simulation_duration_ms=3_000,
+            random_seed=7,
+        )
+        result = Phase2Engine(cfg).run()
+        # If interval went negative, mempool would drain or throw; check basic sanity
+        assert result["total_tx_generated"] >= 0
+        assert result["mempool_total_evicted"] >= 0

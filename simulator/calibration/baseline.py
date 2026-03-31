@@ -144,7 +144,13 @@ class MetricResult:
         Returns:
             MetricResult with computed relative_error and passed flag.
         """
-        if target == 0:
+        # NaN guard: treat NaN simulated values as infinite error.
+        # Without this, `nan <= tolerance` evaluates to False in Python, which
+        # correctly marks passed=False — but `nan * 100` in generate_report()
+        # produces 'nan%' and pollutes overall_error_pct with NaN propagation.
+        if math.isnan(simulated):
+            rel_err = float("inf")
+        elif target == 0:
             rel_err = 0.0 if simulated == 0 else float("inf")
         else:
             rel_err = abs(simulated - target) / abs(target)
@@ -185,9 +191,17 @@ class CalibrationResult:
 
     @property
     def overall_error_pct(self) -> float:
-        """Mean relative error across all metrics (as percentage)."""
-        errors = [m.relative_error for m in self.metrics.values()]
-        return 100.0 * (sum(errors) / len(errors)) if errors else 0.0
+        """Mean relative error across all metrics (as percentage).
+
+        Metrics with NaN or inf simulated values (fee/bandwidth metrics not
+        available from basic DES runs) are excluded from the mean so they
+        do not propagate inf into summary statistics.
+        """
+        finite_errors = [
+            m.relative_error for m in self.metrics.values()
+            if math.isfinite(m.relative_error)
+        ]
+        return 100.0 * (sum(finite_errors) / len(finite_errors)) if finite_errors else 0.0
 
     def generate_report(self) -> str:
         """Generate a markdown calibration report table.
@@ -206,7 +220,11 @@ class CalibrationResult:
         ]
         for name, m in self.metrics.items():
             status  = "✅ Pass" if m.passed else "❌ Fail"
-            err_str = f"{m.relative_error * 100:.1f}%"
+            # Display inf (NaN-derived) as 'N/A — not measured by DES'
+            if math.isinf(m.relative_error):
+                err_str = "N/A"
+            else:
+                err_str = f"{m.relative_error * 100:.1f}%"
             tol_str = f"{m.tolerance * 100:.1f}%"
             lines.append(
                 f"| {name} | {m.target:.3g} | {m.simulated:.3g} "
@@ -320,17 +338,25 @@ class CalibrationRunner:
     ) -> bool:
         """Check whether all simulated metrics are within tolerance.
 
+        NaN safety: a simulated value of float('nan') is treated as a FAIL.
+        This prevents the silent-pass bug where `nan > tolerance` evaluates
+        to False in Python, causing NaN metrics to erroneously pass.
+
         Args:
             simulated: Dict of {metric: simulated_value}.
             tolerance: Override global tolerance (default 20%).
                        If None, uses per-metric tolerances from targets.
 
         Returns:
-            True if all metrics pass.
+            True if all metrics pass (no NaN, no None, within tolerance).
         """
         for metric, (target, per_metric_tol) in self.targets.items():
             sim_val = simulated.get(metric)
             if sim_val is None:
+                return False
+            # NaN guard: Python's nan comparisons always return False, so
+            # `nan > tolerance` is False, which would silently pass NaN metrics.
+            if math.isnan(sim_val):
                 return False
             tol = tolerance if tolerance is not None else per_metric_tol
             if target == 0:
