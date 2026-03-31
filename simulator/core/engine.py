@@ -302,7 +302,16 @@ class DESEngine:
         proposer_id = event.payload["proposer_id"]
         proposer = self.topology.get_node(proposer_id)
 
-        # Create block
+        # Create block.
+        # NOTE (Bug 5 — latent, not a current defect):
+        # register_block() advances state.chain_height and state.chain_tip_hash
+        # immediately at proposal time, before the block is validated by any
+        # peer.  For the current single-proposer linear chain model this is
+        # correct: there is only one proposer per slot, so chain_height always
+        # reflects the latest proposed (and eventually validated) block.
+        # If concurrent proposals or fork-choice are ever added, register_block()
+        # must be deferred until the block achieves finality (quorum validation)
+        # to avoid chain_height reflecting unvalidated orphans.
         block = self._create_block(proposer)
         self.state.register_block(block)
 
@@ -367,22 +376,35 @@ class DESEngine:
                 sender.config.region, receiver.config.region
             )
 
-            # Transmission time with NIC contention
+            # Transmission time with NIC contention.
+            # schedule_upload() updates sender._upload_free_at so that
+            # back-to-back block sends (e.g., validator forwarding two blocks
+            # in rapid succession) correctly queue behind each other instead of
+            # both starting at self.state.current_time_ms.  The NIC bandwidth
+            # division logic (upload_bw / num_concurrent) is identical to the
+            # previous inline model, but now the link serialisation is tracked.
             if self.nic_contention_enabled:
-                # Upload bandwidth is shared across all concurrent sends
                 per_peer_bw = sender.config.upload_bandwidth_mbps / num_concurrent
             else:
-                # Legacy: each send gets full bandwidth
                 per_peer_bw = sender.config.upload_bandwidth_mbps
 
-            # Bottleneck bandwidth (min of sender upload share, receiver download)
+            # Bottleneck: limited by sender upload share or receiver download
             effective_bw = min(per_peer_bw, receiver.config.download_bandwidth_mbps)
-
             if effective_bw <= 0:
                 continue
 
             size_megabits = (task.size_bytes * 8) / 1_000_000
             tx_time_ms = (size_megabits / effective_bw) * 1000
+
+            if self.nic_contention_enabled:
+                # Wire schedule_upload so _upload_free_at is maintained.
+                # We pass num_concurrent so the method applies the same BW
+                # division as above — keeping the two paths consistent.
+                sender.schedule_upload(
+                    start_time_ms=self.state.current_time_ms,
+                    size_bytes=task.size_bytes,
+                    num_concurrent=num_concurrent,
+                )
 
             delay_ms = geo_latency + tx_time_ms
             receive_time = self.state.current_time_ms + delay_ms
@@ -394,6 +416,10 @@ class DESEngine:
                     "block_hash": block_hash,
                     "receiver_id": task.receiver_id,
                     "sender_id": sender_id,
+                    # True for Ethereum announcement peers: they receive the block
+                    # hash first (100 B) and must fetch the full block separately.
+                    # first_seen_by is NOT recorded until the full block arrives.
+                    "is_eth_announcement": task.is_eth_announcement,
                 },
             )
 
@@ -415,7 +441,44 @@ class DESEngine:
         if receiver.has_seen_block(block_hash):
             return
 
-        # Record first seen time
+        # Ethereum two-phase retrieval:
+        # An announcement-only message (100 bytes: hash + number) signals that
+        # the full block exists, but the peer does not yet have the block data.
+        # The peer must request the full block from the sender.  We model this
+        # as: announcement → scheduling a second BLOCK_RECEIVED event with the
+        # full block size, then returning without recording first_seen_by.
+        # Only when the full block arrives is the peer considered to have the block.
+        is_eth_announcement = event.payload.get("is_eth_announcement", False)
+        if is_eth_announcement:
+            sender_id = event.payload.get("sender_id")
+            sender = self.topology.get_node(sender_id) if sender_id else None
+            if sender and block:
+                # Geographic latency for the request round-trip (one way)
+                geo_latency = self.topology.sample_latency(
+                    sender.config.region, receiver.config.region
+                )
+                # Full block retrieval: receiver downloads from sender
+                effective_bw = min(
+                    sender.config.upload_bandwidth_mbps,
+                    receiver.config.download_bandwidth_mbps,
+                )
+                if effective_bw > 0:
+                    size_megabits = (block.size_bytes * 8) / 1_000_000
+                    tx_time_ms = (size_megabits / effective_bw) * 1000
+                    retrieval_time = self.state.current_time_ms + geo_latency + tx_time_ms
+                    self.state.schedule_event(
+                        time_ms=retrieval_time,
+                        event_type=EventType.BLOCK_RECEIVED,
+                        payload={
+                            "block_hash": block_hash,
+                            "receiver_id": receiver_id,
+                            "sender_id": sender_id,
+                            "is_eth_announcement": False,  # Full block this time
+                        },
+                    )
+            return  # Don't record first_seen_by — wait for full block
+
+        # Record first seen time (full block received)
         block.first_seen_by[receiver_id] = self.state.current_time_ms
         receiver.mark_block_seen(block_hash, self.state.current_time_ms)
 

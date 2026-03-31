@@ -444,6 +444,18 @@ class Phase2Engine:
             ) + 1
         primary_algo = max(algo_counts, key=algo_counts.get)  # type: ignore
 
+        # Bug 7 fix: record each included transaction's fee rate into the
+        # fee market so the first-price model can set the next block's base
+        # fee to min(included fees).  Without this, _last_block_fees was always
+        # empty, causing _update_first_price() to decay toward the floor on
+        # every block regardless of actual network demand.
+        if self._fee_market is not None:
+            for tx in candidates:
+                if tx.size_bytes > 0:
+                    self._fee_market.record_block_fee(
+                        tx.fee_satoshis / tx.size_bytes
+                    )
+
         block = Block(
             block_hash=f"block_{self._engine.state.chain_height + 1}",
             parent_hash=self._engine.state.chain_tip_hash,
@@ -462,14 +474,39 @@ class Phase2Engine:
     ) -> float:
         """Compute verification time iterating each transaction individually.
 
-        CRITICAL PHYSICS CONSTRAINT:
-        Each transaction's signature is verified sequentially on a per-core
-        basis. The total time is the sum of individual verification times
-        divided by the node's CPU cores (parallel verification across cores).
+        Mirrors the Phase 1 model in Node.verification_time_ms() exactly:
+          1. Raw serial time from the catalog (sum over all transactions)
+          2. Adjusted for processing_power_factor as a SERIAL speed divisor
+             (faster hardware verifies each signature proportionally faster)
+          3. Parallelised across cpu_cores (independent work on separate cores)
 
-        For a heterogeneous block:
-          total_serial_us = Σ verify_time_us(tx.signature_algorithm)
-          total_parallel_ms = total_serial_us / (cpu_cores × processing_factor × 1000)
+        This is consistent with Node.schedule_verification() in node.py which
+        receives a verify_duration_ms already adjusted for processing_power_factor
+        and then distributes across cores via the _core_free_at heap.
+
+        PREVIOUS BUG: The original implementation multiplied cpu_cores ×
+        processing_power_factor as a single divisor.  A node with 64 cores and
+        processing_power_factor=1.8 would have effective_cores=115.2, massively
+        underestimating verification time vs Phase 1.  The two models would
+        disagree by up to processing_power_factor × for the same block.
+
+        For a heterogeneous block, mirroring Node.verification_time_ms() exactly:
+          total_serial_us  = Σ verify_time_us(tx.algorithm) × tx.num_signatures
+          adjusted_us      = total_serial_us / processing_power_factor
+          total_ms         = adjusted_us / 1000
+
+        The result is then passed to node.schedule_verification() which distributes
+        the job across cpu_cores via the _core_free_at heap — exactly as Phase 1
+        does.  Do NOT divide by cpu_cores here; that would double-apply the core
+        parallelisation.
+
+        PREVIOUS BUG: The original implementation computed
+            effective_cores = cpu_cores × processing_power_factor
+        treating them as a single divisor.  This is wrong because:
+          1. It conflates a speed factor (power) with a parallelism factor (cores)
+          2. A datacenter node with 64 cores × 1.8 speed = 115.2 “effective cores”
+             massively underestimates verification time vs Phase 1
+          3. Phase 1 never divides by cpu_cores in verification_time_ms()
         """
         total_serial_us = 0.0
 
@@ -481,15 +518,11 @@ class Phase2Engine:
                 # Unknown algo: conservative 500 µs/sig
                 total_serial_us += 500.0 * tx.num_signatures
 
-        # Parallelize across CPU cores, adjusted for processing power
-        effective_cores = (
-            node.config.cpu_cores * node.config.processing_power_factor
-        )
-        if effective_cores <= 0:
-            effective_cores = 1.0
-
-        total_parallel_us = total_serial_us / effective_cores
-        total_ms = total_parallel_us / 1000.0
+        # Mirror Node.verification_time_ms(): divide by speed factor only.
+        # schedule_verification() handles the cpu_cores parallelism.
+        power_factor = max(0.001, node.config.processing_power_factor)
+        adjusted_serial_us = total_serial_us / power_factor
+        total_ms           = adjusted_serial_us / 1000.0
 
         self._verification_times_ms.append(total_ms)
         return total_ms

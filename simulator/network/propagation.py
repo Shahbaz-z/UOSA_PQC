@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -80,6 +81,15 @@ class Block:
     def propagation_percentile(self, percentile: float) -> Optional[float]:
         """Time for block to reach given percentile of nodes.
 
+        Uses the nearest-rank method: the p-th percentile of n values is
+        the value at sorted index ceil(p/100 * n) - 1  (0-based).
+
+        Bug history: the previous implementation used
+            index = int(n * p / 100)
+        which returns the (p+1)-th value for exact multiples (e.g., index 90
+        for n=100, p=90 is the 91st value, not the 90th).  This caused every
+        reported percentile to be systematically biased upward by one position.
+
         Args:
             percentile: Value between 0 and 100 (e.g., 90 for p90).
 
@@ -89,7 +99,6 @@ class Block:
         if not self.first_seen_by:
             return None
 
-        # Get relative times from proposal
         proposal_time = self.timestamp_ms
         relative_times = sorted(
             t - proposal_time for t in self.first_seen_by.values()
@@ -98,11 +107,16 @@ class Block:
         if not relative_times:
             return None
 
-        index = int(len(relative_times) * percentile / 100)
-        return relative_times[min(index, len(relative_times) - 1)]
+        # Nearest-rank method: ceil(p/100 * n) - 1, clamped to [0, n-1]
+        n = len(relative_times)
+        index = max(0, math.ceil(n * percentile / 100) - 1)
+        return relative_times[min(index, n - 1)]
 
     def validation_percentile(self, percentile: float) -> Optional[float]:
-        """Time for block to be validated by given percentile of nodes."""
+        """Time for block to be validated by given percentile of nodes.
+
+        Uses the same nearest-rank method as propagation_percentile.
+        """
         if not self.validated_by:
             return None
 
@@ -114,8 +128,9 @@ class Block:
         if not relative_times:
             return None
 
-        index = int(len(relative_times) * percentile / 100)
-        return relative_times[min(index, len(relative_times) - 1)]
+        n = len(relative_times)
+        index = max(0, math.ceil(n * percentile / 100) - 1)
+        return relative_times[min(index, n - 1)]
 
     def coverage(self, total_nodes: int) -> float:
         """Fraction of network that has seen this block."""

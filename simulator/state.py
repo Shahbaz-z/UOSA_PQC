@@ -36,6 +36,13 @@ class SimulationState:
     blocks_finalized: List["Block"] = field(default_factory=list)
     orphaned_blocks: List["Block"] = field(default_factory=list)
 
+    # O(1) block lookup by hash.  Populated in register_block().
+    # Without this, get_block_by_hash does an O(n) linear scan on every
+    # BLOCK_RECEIVED and BLOCK_PROPAGATED event.  For a 5-minute Solana
+    # simulation (~750 blocks × 75 nodes × 150 events/block ≈ 8M calls)
+    # the scan cost grows super-linearly.  The dict adds negligible memory.
+    _block_index: Dict[str, "Block"] = field(default_factory=dict)
+
     # Chain state (simplified: linear chain, no forks modeled yet)
     chain_tip_hash: str = "genesis"
     chain_height: int = 0
@@ -81,14 +88,16 @@ class SimulationState:
         return len(self.event_queue) > 0
 
     def get_block_by_hash(self, block_hash: str) -> Optional["Block"]:
-        """Retrieve a block by its hash."""
-        for block in self.blocks_proposed:
-            if block.block_hash == block_hash:
-                return block
-        return None
+        """O(1) block lookup by hash via the _block_index dict.
+
+        Previous implementation did an O(n) linear scan of blocks_proposed
+        which was called on every BLOCK_RECEIVED and BLOCK_PROPAGATED event.
+        """
+        return self._block_index.get(block_hash)
 
     def register_block(self, block: "Block") -> None:
         """Register a newly proposed block."""
         self.blocks_proposed.append(block)
+        self._block_index[block.block_hash] = block  # O(1) index update
         self.chain_height = block.height
         self.chain_tip_hash = block.block_hash

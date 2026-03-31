@@ -38,6 +38,11 @@ class PropagationTask:
     size_bytes: int
     layer: int = 0
     is_compact: bool = False
+    # True for Ethereum announcement-only peers.  When set, _handle_block_received
+    # schedules a second BLOCK_RECEIVED event with the full block size before
+    # recording first_seen_by.  Prevents announcement latency from being counted
+    # as block-received latency (which systematically underestimates Ethereum p90).
+    is_eth_announcement: bool = False
 
 
 class RoutingStrategy(ABC):
@@ -282,10 +287,15 @@ class EthHybridRouting(RoutingStrategy):
                 is_compact=False,
             ))
 
-        # Announcement: tiny message, then they request full block
-        # Model as: announcement delay + full block download
-        # For simplicity: the size_bytes is the full block (they'll request it)
-        # but mark as compact so the engine knows the initial send is small
+        # Announcement: tiny message (100 bytes: block hash + number).
+        # After receiving the announcement the peer requests the full block.
+        # Model as TWO sequential events:
+        #   1. Announcement arrives  → size_bytes = ANNOUNCEMENT_SIZE_BYTES
+        #      is_compact = True, is_eth_announcement = True
+        #   2. Full block retrieved  → size_bytes = block.size_bytes
+        #      Scheduled by _handle_block_received when is_eth_announcement=True.
+        # This ensures first_seen_by is NOT recorded at announcement time —
+        # the peer only "has" the block after the full retrieval completes.
         for p in announce_peers:
             tasks.append(PropagationTask(
                 sender_id=sender.node_id,
@@ -293,6 +303,7 @@ class EthHybridRouting(RoutingStrategy):
                 size_bytes=self.ANNOUNCEMENT_SIZE_BYTES,
                 layer=0,
                 is_compact=True,
+                is_eth_announcement=True,
             ))
 
         return tasks
