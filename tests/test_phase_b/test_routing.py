@@ -202,8 +202,8 @@ class TestEthHybridRouting:
 
         # Direct sends have full block size
         assert all(t.size_bytes == 500_000 for t in direct)
-        # Announcements have small size
-        assert all(t.size_bytes == 100 for t in announce)
+        # ETH-4 FIX: announcement size is 48 bytes (devp2p NewBlockHashes)
+        assert all(t.size_bytes == 48 for t in announce)
 
     def test_at_least_one_direct_send(self):
         """Even with few peers, at least 1 gets direct propagation."""

@@ -227,15 +227,16 @@ class CompactBlockRouting(RoutingStrategy):
     from its mempool; if transactions are missing it must send `getblocktxn`
     to the sender and wait for the response.
 
-    Mempool hit rate assumption: compact_fraction = 0.10 models the case
-    where the receiving node already has 90% of the transactions.  In practice
-    with PQC signatures, relay nodes have zero PQC transactions in their mempools
-    (they have never seen them), so compact_fraction should approach 1.0 at
-    high PQC adoption.  This fixed value is a documented simplification.
+    BTC-2 FIX: compact_fraction is now a function of pqc_adoption_fraction.
+    At 0% PQC, relay nodes have 90% of transactions already → compact_fraction=0.10.
+    At 100% PQC, relay nodes have NEVER seen PQC transactions → compact_fraction→1.0.
+    Linear interpolation: compact_fraction = 0.10 + 0.90 × pqc_fraction.
+    This correctly captures the collapse of compact block efficiency as PQC adoption
+    grows — a key finding for the paper’s Bitcoin propagation analysis.
     Reference: BIP 152 — https://github.com/bitcoin/bips/blob/master/bip-0152.mediawiki
 
     The compact block relay is modelled as two events for relay peers:
-      1. Compact block arrives (size = block.size_bytes * compact_fraction)
+      1. Compact block arrives (size = block.size_bytes * effective_compact_fraction)
          → triggers a `getblocktxn` request if reconstruction fails
       2. Full-block response arrives after one round-trip (2 × geo_latency)
          → first_seen_by is recorded when the full block is received
@@ -243,9 +244,27 @@ class CompactBlockRouting(RoutingStrategy):
     that a second BLOCK_RECEIVED event should be scheduled for the full block.
     """
 
-    def __init__(self, fanout: int = 8, compact_fraction: float = 0.10):
+    def __init__(self, fanout: int = 8, compact_fraction: float = 0.10,
+                 pqc_adoption_fraction: float = 0.0):
         self.fanout = fanout
-        self.compact_fraction = compact_fraction
+        # BTC-2: base compact fraction at 0% PQC (90% mempool overlap → 10% of block)
+        self._base_compact_fraction = compact_fraction
+        self.pqc_adoption_fraction = pqc_adoption_fraction
+
+    @property
+    def compact_fraction(self) -> float:
+        """Effective compact block fraction, adjusted for PQC adoption.
+
+        BTC-2: As PQC adoption grows, relay nodes have progressively fewer
+        matching transactions in their mempools (PQC transactions are novel),
+        so the compact block’s short-txID reconstruction fails more often.
+        At 100% PQC, the compact fraction approaches 1.0 (full block size).
+
+        Formula: compact_fraction = base + (1 - base) × pqc_fraction
+        where base = 0.10 (classical mempool hit rate at 0% PQC).
+        """
+        base = self._base_compact_fraction
+        return base + (1.0 - base) * self.pqc_adoption_fraction
 
     def plan_propagation(
         self,
@@ -305,12 +324,16 @@ class EthHybridRouting(RoutingStrategy):
     2. Block-hash announcement to remaining peers (tiny message)
        - Peers that don't have the block then request it
 
-    The announcement message is very small (~100 bytes: hash + number).
+    The announcement message is ~48 bytes (devp2p NewBlockHashes: hash(32) + number(8) + RLP(8)).
     The full-block direct propagation to sqrt(N) peers provides fast
     initial spread, while announcements ensure coverage.
     """
 
-    ANNOUNCEMENT_SIZE_BYTES = 100  # block hash + block number
+    # ETH-4 FIX: devp2p NewBlockHashes message = hash(32) + number(8) + RLP framing(8) = 48 bytes.
+    # Previous value of 100 was 2× the actual size.
+    # Source: Ethereum devp2p eth/68 wire protocol spec:
+    # https://github.com/ethereum/devp2p/blob/master/caps/eth.md#newblockhashes-0x01
+    ANNOUNCEMENT_SIZE_BYTES = 48   # devp2p NewBlockHashes: hash(32) + number(8) + RLP(8)
 
     def __init__(self, fanout: int = 16):
         """fanout here is the total peer count (not direct-send count)."""
@@ -372,11 +395,15 @@ class EthHybridRouting(RoutingStrategy):
         return tasks
 
 
-def get_routing_strategy(chain: str) -> RoutingStrategy:
+def get_routing_strategy(chain: str, pqc_adoption_fraction: float = 0.0) -> RoutingStrategy:
     """Get the appropriate routing strategy for a chain.
 
     Args:
         chain: Chain name (case-insensitive).
+        pqc_adoption_fraction: Fraction of transactions using PQC [0.0, 1.0].
+            Used by CompactBlockRouting (BTC-2) to scale compact block efficiency:
+            at 0% PQC nodes share 90% mempool overlap; at 100% PQC overlap
+            collapses to 0% (relay nodes have never seen PQC transactions).
 
     Returns:
         RoutingStrategy instance configured for the chain.
@@ -385,7 +412,9 @@ def get_routing_strategy(chain: str) -> RoutingStrategy:
     if chain_lower == "solana":
         return TurbineRouting(fanout=200)
     elif chain_lower == "bitcoin":
-        return CompactBlockRouting(fanout=8, compact_fraction=0.10)
+        # BTC-2: pass pqc_adoption_fraction so compact_fraction scales with PQC mix
+        return CompactBlockRouting(fanout=8, compact_fraction=0.10,
+                                   pqc_adoption_fraction=pqc_adoption_fraction)
     elif chain_lower == "ethereum":
         return EthHybridRouting(fanout=16)
     else:

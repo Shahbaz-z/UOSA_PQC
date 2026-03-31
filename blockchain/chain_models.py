@@ -251,15 +251,17 @@ def compare_all_solana(
     base_tx_overhead: int = SOLANA_BASE_TX_OVERHEAD,
     slot_time_ms: int = SOLANA_SLOT_TIME_MS,
     num_signers: int = 1,
-    vote_tx_pct: float = SOLANA_VOTE_TX_PCT_DEFAULT,
+    vote_tx_pct: float = SOLANA_VOTE_TX_PCT_REALISTIC,
 ) -> ComparativeAnalysis:
     """Run Solana block-space analysis for every signature scheme.
 
-    BUG-I NOTE — vote_tx_pct defaults to 0.0 (SOLANA_VOTE_TX_PCT_DEFAULT),
-    which omits vote-transaction block-space overhead entirely.  This overstates
-    Solana user-transaction throughput by ~3.3× relative to the realistic
-    scenario where votes consume ~70% of block space.  To model realistic
-    mainnet throughput, pass vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC (0.70).
+    SOL-4 FIX: Default changed from SOLANA_VOTE_TX_PCT_DEFAULT (0.0) to
+    SOLANA_VOTE_TX_PCT_REALISTIC (0.70).  The 0.0 default was overstating
+    Solana user-transaction throughput by ~3.3×.  Any caller that needs the
+    old zero-vote-overhead behaviour should pass vote_tx_pct=SOLANA_VOTE_TX_PCT_DEFAULT
+    explicitly.
+
+    For backwards-compatible results: compare_all_solana(vote_tx_pct=0.0).
 
     BUG-A NOTE — Three inconsistent vote models exist in this codebase:
       1. This function: fraction-based deduction (block_size × (1 - vote_tx_pct))

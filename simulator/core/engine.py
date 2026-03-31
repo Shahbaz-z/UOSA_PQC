@@ -157,7 +157,14 @@ class DESEngine:
 
         # Routing strategy
         if config.use_chain_routing:
-            self.routing = get_routing_strategy(config.chain)
+            # BTC-2: pass pqc_adoption_fraction so CompactBlockRouting can scale
+            # its compact_fraction correctly.  In the DES engine, a run uses one
+            # algorithm throughout, so pqc_fraction = 0 for classical algorithms
+            # and 1.0 for any PQC algorithm.
+            _CLASSICAL = {"ECDSA", "Ed25519", "Schnorr", "BLS12-381"}
+            _pqc_frac = 0.0 if config.signature_algorithm in _CLASSICAL else 1.0
+            self.routing = get_routing_strategy(config.chain,
+                                                pqc_adoption_fraction=_pqc_frac)
         else:
             self.routing = GossipRouting(fanout=self.gossip_fanout)
 
@@ -750,32 +757,10 @@ class DESEngine:
 
         return block
 
-    def _select_gossip_peers(self, sender: Node, block: Block) -> List[Node]:
-        """[DEPRECATED — dead code] Legacy gossip peer selection.
-
-        The primary propagation path uses self.routing.plan_propagation()
-        in _handle_block_propagated(), which dispatches to chain-specific
-        routing strategies (Turbine, CompactBlock, EthHybrid).
-
-        Phase2Engine does NOT monkey-patch propagation, so this method is
-        never called in any current code path.  It is retained only because
-        removing it would require a minor version bump to avoid breaking any
-        downstream forks that may reference it directly.
-
-        DO NOT use in new code.  Use self.routing.plan_propagation() instead.
-        """
-        all_nodes = list(self.topology.nodes.values())
-        available = [
-            n for n in all_nodes
-            if n.node_id != sender.node_id
-            and not n.has_seen_block(block.block_hash)
-        ]
-
-        if not available:
-            return []
-
-        fanout = min(self.gossip_fanout, len(available))
-        return self.rng.sample(available, fanout)
+    # ENG-1 FIX: _select_gossip_peers() removed (was dead code).
+    # It was never called in any code path — the engine uses
+    # self.routing.plan_propagation() exclusively.
+    # Removed per academic-codebase cleanup: no downstream forks exist.
 
     def _compute_results(self) -> SimulationResult:
         """Compute metrics from completed simulation."""
@@ -833,7 +818,7 @@ class DESEngine:
         # When propagation fails at high PQC fractions, many blocks reach zero
         # peers and are excluded from propagation_p90.  avg_propagation_p90_coverage
         # tells downstream consumers how complete the P90 sample is.
-        total_blocks = len(self.state.blocks_proposed)
+        # ENG-2 FIX: duplicate `total_blocks = ...` assignment removed (same value).
         p90_coverage = (
             len(propagation_p90) / total_blocks if total_blocks > 0 else 0.0
         )

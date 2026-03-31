@@ -173,7 +173,12 @@ class TestP2TRDeferredExposure:
     """P2TR must contribute to deferred exposure at partial weight."""
 
     def test_p2tr_included_in_deferred(self):
-        """deferred_exposure_btc() must include P2TR at 0.5× weight."""
+        """deferred_exposure_btc() must include P2TR at full weight=1.0 (BTC-3 fix).
+
+        Previous test expected 0.5× weight.  BTC-3 fix: P2TR has no quantum
+        hardness advantage; tweaked Schnorr key is susceptible to Shor’s algorithm
+        identically to P2WPKH.  SPEND_FREQUENCY_FACTOR captures velocity separately.
+        """
         model = DEFAULT_EXPOSURE_MODEL
         dist  = model.utxo_distribution
 
@@ -183,25 +188,29 @@ class TestP2TRDeferredExposure:
             for t in ["P2PKH", "P2WPKH", "P2WSH"]
         )
         actual = model.deferred_exposure_btc()
-        p2tr_contribution = dist.btc_by_type.get("P2TR", 0.0) * 0.5
+        # BTC-3: P2TR_DEFERRED_WEIGHT = 1.0 (full exposure, not 0.5×)
+        p2tr_contribution = dist.btc_by_type.get("P2TR", 0.0) * model.P2TR_DEFERRED_WEIGHT
 
         assert actual > without_p2tr, "P2TR should increase deferred exposure"
         assert abs(actual - (without_p2tr + p2tr_contribution)) < 1.0, (
-            f"P2TR contribution should be 0.5× P2TR BTC ({p2tr_contribution:.0f})"
+            f"P2TR contribution should be {model.P2TR_DEFERRED_WEIGHT}× P2TR BTC "
+            f"({p2tr_contribution:.0f})"
         )
 
-    def test_p2tr_weight_is_half(self):
-        """P2TR contribution should be exactly 0.5 × P2TR BTC."""
+    def test_p2tr_weight_is_one(self):
+        """P2TR_DEFERRED_WEIGHT must be 1.0 (BTC-3 fix: no quantum hardness discount)."""
         model = QuantumExposureModel()
         dist  = model.utxo_distribution
         p2tr_btc = dist.btc_by_type.get("P2TR", 0.0)
         expected_contribution = p2tr_btc * model.P2TR_DEFERRED_WEIGHT
-        assert expected_contribution == pytest.approx(p2tr_btc * 0.5, rel=0.001)
+        # BTC-3: weight is now 1.0; contribution == p2tr_btc
+        assert expected_contribution == pytest.approx(p2tr_btc * 1.0, rel=0.001)
 
     def test_p2tr_weight_attribute_exists(self):
-        """P2TR_DEFERRED_WEIGHT must be accessible as a class attribute."""
+        """P2TR_DEFERRED_WEIGHT must be 1.0 (BTC-3 fix)."""
         assert hasattr(QuantumExposureModel, "P2TR_DEFERRED_WEIGHT")
-        assert 0 < QuantumExposureModel.P2TR_DEFERRED_WEIGHT < 1.0
+        # BTC-3: weight is now exactly 1.0, not a fraction
+        assert QuantumExposureModel.P2TR_DEFERRED_WEIGHT == 1.0
 
 
 # ---------------------------------------------------------------------------

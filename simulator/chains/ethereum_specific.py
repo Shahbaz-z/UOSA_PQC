@@ -28,6 +28,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+# ETH-1 FIX: Import the single authoritative calldata gas constant from chain_models.
+# Previously, both ethereum_specific.py (hardcoded 40) and chain_models.py defined
+# separate literals.  Any commit updating one but not the other would silently
+# produce diverging gas figures for the same scenario — the same failure mode as
+# BUG-E (block size mismatch) and BUG-B (CU cost ordering).
+# chain_models.py is the canonical source; we import from it here.
+from blockchain.chain_models import ETHEREUM_CALLDATA_GAS_PER_BYTE, SIGNATURE_SIZES, PUBLIC_KEY_SIZES  # noqa: E402  ETH-1+ETH-5
+
 
 # ---------------------------------------------------------------------------
 # PQC verification gas schedule
@@ -143,7 +151,7 @@ class EthereumTxModel:
     # Default changed to 40 to reflect the current (2026) Ethereum network.
     # To reproduce pre-Pectra analysis, instantiate with calldata_gas_per_nonzero_byte=16.
     # Reference: https://eips.ethereum.org/EIPS/eip-7623
-    calldata_gas_per_nonzero_byte: int = 40  # EIP-7623 post-Pectra (was 16 pre-Pectra)
+    calldata_gas_per_nonzero_byte: int = ETHEREUM_CALLDATA_GAS_PER_BYTE  # ETH-1: single source of truth (EIP-7623 post-Pectra)
     calldata_gas_per_zero_byte: int = 4
     sig_algorithm: str = "ECDSA"       # Algorithm for PQC gas schedule lookup
     avg_calldata_bytes: int = 100       # Average additional calldata
@@ -242,6 +250,11 @@ class EthereumTxModel:
         pqc_calldata       = self.calldata_gas(pqc_sig_size + pqc_pk_size)
         extra_gas          = self.calldata_gas(self.avg_calldata_bytes)
 
+        # ETH-2 NOTE: account_abstraction_overhead_gas IS included here.
+        # The primary migration path on Ethereum (EIP-4337 UserOperations,
+        # EIP-7702 delegations) carries the AA overhead for hybrid transactions.
+        # To model standard EOA dual-sig (if supported without AA), instantiate
+        # EthereumTxModel with account_abstraction_overhead_gas=0.
         return (
             self.base_gas
             + classical_calldata
@@ -329,7 +342,7 @@ class EthereumTxModel:
         Returns:
             Gas overhead ratio (1.0 = no overhead, 10.0 = 10× more gas).
         """
-        from blockchain.chain_models import SIGNATURE_SIZES, PUBLIC_KEY_SIZES
+        # ETH-5 FIX: import moved to module top-level (was deferred, non-idiomatic)
         ecdsa_gas = self.tx_gas(
             SIGNATURE_SIZES.get("ECDSA", 72),
             PUBLIC_KEY_SIZES.get("ECDSA", 33),

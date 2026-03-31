@@ -165,6 +165,16 @@ class Phase2Engine:
         # Construct the Phase 1 engine (network, topology, state)
         self._engine = DESEngine(self._sim_config)
 
+        # BTC-2: Update the routing strategy with the actual PQC fraction.
+        # DESEngine constructs routing with pqc_fraction derived from
+        # signature_algorithm (0 or 1).  Phase2Engine uses a mixed block
+        # (pqc_fraction in [0,1]), so we re-apply the routing with the
+        # exact fraction from Phase2Config for accurate compact block sizing.
+        if config.use_chain_routing and config.chain.lower() == "bitcoin":
+            from simulator.network.routing import get_routing_strategy as _grs
+            self._engine.routing = _grs(config.chain,
+                                        pqc_adoption_fraction=config.pqc_fraction)
+
         # Phase 2 components
         self._arrival_model = PoissonArrivalModel(
             lambda_tps=config.lambda_tps,

@@ -42,12 +42,22 @@ class BitcoinTxModel:
     OUTPUT_VALUE_BYTES: int = 8      # value
     OUTPUT_SCRIPT_BYTES: int = 26    # Typical P2WPKH scriptPubKey (1+1+20+1+1+2)
     WITNESS_ITEM_OVERHEAD: int = 2   # witness item count + stack item lengths
+    # BTC-1 FIX: SegWit serialisation has a 2-byte marker+flag field (0x00 0x01).
+    # Per BIP 141, these two bytes are part of the WITNESS structure and therefore
+    # count at 1 WU each (not 4 WU each).  They must live in witness_size(), not
+    # base_size().  The old code included them in base_size() (+2 to header),
+    # which charged them at 4 WU/byte — an overcharge of 6 WU per transaction.
+    # Fix: remove from base_size(); add SEGWIT_MARKER_BYTES = 2 to witness_size().
+    # BIP 141: https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki
+    SEGWIT_MARKER_BYTES: int = 2     # marker (0x00) + flag (0x01) — witness bytes, 1 WU each
 
     def base_size(self, sig_size: int = 0, pk_size: int = 0) -> int:
-        """Non-witness transaction size in bytes.
+        """Non-witness transaction size in bytes (per BIP 141 base serialisation).
 
-        For SegWit transactions, the scriptSig is empty (signatures
-        are in the witness). Base size is just structure + outputs.
+        For SegWit transactions, the scriptSig is empty (signatures are in the
+        witness).  The SegWit marker+flag bytes are NOT included here — they are
+        part of the extended witness serialisation and count at 1 WU, not 4 WU
+        (BTC-1 fix).
 
         Args:
             sig_size: Signature size (unused for base; sigs are in witness).
@@ -56,10 +66,11 @@ class BitcoinTxModel:
         Returns:
             Base transaction size in bytes.
         """
-        # Version + marker + flag
-        header = self.VERSION_BYTES + self.LOCKTIME_BYTES + 2  # +2 for varint counts
+        # BTC-1 FIX: header is version(4) + locktime(4) only.
+        # Marker+flag moved to witness_size() where they belong (1 WU each).
+        header = self.VERSION_BYTES + self.LOCKTIME_BYTES
 
-        # Inputs: prevout + sequence + empty scriptSig
+        # Inputs: prevout + sequence + empty scriptSig varint
         inputs = self.avg_inputs * (
             self.INPUT_PREVOUT_BYTES
             + self.INPUT_SEQUENCE_BYTES
@@ -67,16 +78,18 @@ class BitcoinTxModel:
         )
 
         # Outputs: value + scriptPubKey
+        # +1 for input count varint, +1 for output count varint (base serialisation)
         outputs = self.avg_outputs * (
             self.OUTPUT_VALUE_BYTES + self.OUTPUT_SCRIPT_BYTES
         )
 
-        return header + inputs + outputs
+        return header + 2 + inputs + outputs  # +2: input/output count varints
 
     def witness_size(self, sig_size: int, pk_size: int) -> int:
-        """Witness data size in bytes.
+        """Witness data size in bytes (per BIP 141 extended serialisation).
 
-        Each input has a witness field containing the signature and public key.
+        Includes the SegWit marker+flag bytes (0x00 0x01) which are part of
+        the witness structure and count at 1 WU each (BTC-1 fix).
 
         Args:
             sig_size: Signature size in bytes.
@@ -86,7 +99,8 @@ class BitcoinTxModel:
             Total witness data size in bytes.
         """
         per_input = sig_size + pk_size + self.WITNESS_ITEM_OVERHEAD
-        return self.avg_inputs * per_input
+        # BTC-1 FIX: marker(1) + flag(1) added here (witness bytes, 1 WU each)
+        return self.SEGWIT_MARKER_BYTES + self.avg_inputs * per_input
 
     def tx_weight(self, sig_size: int, pk_size: int) -> int:
         """Compute transaction weight units (SegWit accounting).

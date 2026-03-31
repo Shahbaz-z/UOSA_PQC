@@ -310,3 +310,75 @@ A comment has been added to `TurbineRouting.plan_propagation` explicitly documen
 **Resolution:** `compare_all_solana()` now includes a docstring warning explaining this default and directing callers to pass `vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC (0.70)` for paper-facing analysis. A full unification of the three models (removing Models 1 and 2 in favour of Model 3) is deferred as it would require restructuring the static analysis API.
 
 **Why 5.4% ≠ 75% mainnet:** The `SolanaTxModel` individual-tx model (`226 B × 1,500 validators = 339 KB = 5.4% of 6 MB`) appears to contradict the empirical 75% mainnet vote overhead. This is reconciled by noting that mainnet includes accumulated epoch-history vote account data in every block, not just the current slot's new attestations. The simulation correctly models only the current-slot vote transaction stream (226 B × N validators) — a deliberate simplification that is now explicitly documented here.
+
+---
+
+## 11. Multi-Chain Engineer Review Fixes
+
+### 11.1 SegWit Marker+Flag Weight Classification — ✅ FIXED (BTC-1)
+
+**Previous bug:** `BitcoinTxModel.base_size()` included the SegWit serialisation marker (`0x00`) and flag (`0x01`) in the header via `+2 for varint counts`, charging them at 4 WU/byte (non-witness weight). Per BIP 141, these 2 bytes are part of the extended witness serialisation and count at 1 WU/byte. The overcharge was `2 × 3 WU excess = 6 WU per transaction`.
+
+**Fix:** Moved to `witness_size()` as `SEGWIT_MARKER_BYTES = 2`. `base_size()` now contains only version(4) + locktime(4) + varint counts(2) + inputs + outputs. For a 2-in-2-out ML-DSA-65 transaction (~5,261 WU in witness), the corrected base weight changes by ≈0.1% — tiny but technically correct per BIP 141.
+
+### 11.2 Single Ethereum Calldata Gas Constant — ✅ FIXED (ETH-1)
+
+**Previous issue:** `EthereumTxModel` (in `ethereum_specific.py`) and `analyze_ethereum_block_space` (in `chain_models.py`) each defined a separate `40` gas/byte literal for EIP-7623 calldata. Two separate literals are a maintenance hazard — any future update to one creates a silent divergence.
+
+**Fix:** `ethereum_specific.py` now imports `ETHEREUM_CALLDATA_GAS_PER_BYTE` from `blockchain/chain_models.py` and uses it as the dataclass default. `chain_models.py` is the single source of truth. The deferred import inside `gas_overhead_ratio()` (ETH-5) was simultaneously moved to module top-level.
+
+### 11.3 P2TR Quantum Exposure Weight — ✅ FIXED (BTC-3)
+
+**Previous value:** `P2TR_DEFERRED_WEIGHT = 0.5`. The 0.5× discount reflected the assertion that P2TR's tweaked Schnorr key is "harder" to attack. This is incorrect — the Taproot tweak `Q = P + H(P,t)·G` does not add any quantum hardness. Shor's algorithm solves the discrete logarithm of `Q` in polynomial time regardless of the derivation path. The distinguishing property of P2TR is **spend velocity** (P2TR UTXOs are more actively managed and turn over faster), not quantum resilience.
+
+**Fix:** `P2TR_DEFERRED_WEIGHT = 1.0`. Quantum exposure for P2TR is the same as P2WPKH. The faster spend velocity is already captured by `SPEND_FREQUENCY_FACTOR["P2TR"]`, which correctly models the higher turnover rate. This change increases the simulated deferred BTC exposure by the P2TR UTXO fraction (~15% of all UTXOs as of 2025).
+
+**Sources:** BIP 341; Google Quantum AI — [Safeguarding cryptocurrency by disclosing quantum vulnerabilities responsibly](https://research.google/blog/safeguarding-cryptocurrency-by-disclosing-quantum-vulnerabilities-responsibly/).
+
+### 11.4 Compact Block Efficiency vs PQC Adoption — ✅ FIXED (BTC-2)
+
+**Previous issue:** `CompactBlockRouting` used a fixed `compact_fraction = 0.10` regardless of PQC adoption. This modelled relay nodes as always having 90% mempool overlap — a valid assumption for classical transactions but wrong for PQC transactions, which relay nodes have never seen before. At 100% PQC adoption, compact block relay degenerates to near full-block size, and the fixed 0.10 constant systematically underestimated Bitcoin relay latency where the paper's findings matter most.
+
+**Fix:** `compact_fraction` is now a computed property: `base + (1 − base) × pqc_fraction` where base = 0.10. `get_routing_strategy()` accepts `pqc_adoption_fraction` and passes it through. DESEngine derives the fraction from the signature algorithm (0 for classical, 1.0 for PQC). Phase2Engine overrides with the exact `config.pqc_fraction` for mixed-algorithm blocks.
+
+**Impact:** At 100% PQC, Bitcoin relay nodes now send the full block (compact_fraction = 1.0), increasing simulated Bitcoin propagation latency at high PQC fractions.
+
+### 11.5 CRQC Probability Distribution — DOCUMENTED (BTC-4)
+
+**Acknowledged inconsistency:** `QuantumExposureModel.exposure_timeline()` uses a logistic CDF (symmetric) despite the attribute being named `crqc_sigma_years` and the docstring referencing "log-normal uncertainty." Security literature (Mosca 2022) favours log-normal or Weibull distributions for CRQC arrival timing because the right tail (later-than-expected CRQC) carries more probability mass than the left tail.
+
+**Resolution:** A clarifying comment has been added at the implementation site. The logistic CDF is a defensible approximation for central estimates and sensitivity analyses but underestimates the probability of a late-but-sudden CRQC arrival. The docstring attribute name is intentionally left as `crqc_sigma_years` for backwards compatibility; the comment explains the mismatch.
+
+**Source:** Google Quantum AI — [Safeguarding cryptocurrency by disclosing quantum vulnerabilities responsibly](https://research.google/blog/safeguarding-cryptocurrency-by-disclosing-quantum-vulnerabilities-responsibly/).
+
+### 11.6 Ethereum Announcement Size — ✅ FIXED (ETH-4)
+
+**Previous value:** `EthHybridRouting.ANNOUNCEMENT_SIZE_BYTES = 100`. The devp2p `NewBlockHashes` message (eth/68 wire protocol) contains `[hash(32), number(8)]` per entry plus ~8 bytes RLP framing = 48 bytes. The 100-byte estimate was approximately 2× the actual size.
+
+**Fix:** `ANNOUNCEMENT_SIZE_BYTES = 48`. Impact on latency is negligible (announcements are tiny relative to full blocks) but the constant is now protocol-accurate.
+
+**Source:** [Ethereum devp2p eth/68 wire protocol spec](https://github.com/ethereum/devp2p/blob/master/caps/eth.md#newblockhashes-0x01).
+
+### 11.7 Solana `compare_all_solana()` Default Vote Fraction — ✅ FIXED (SOL-4)
+
+**Previous default:** `vote_tx_pct=0.0` overstated Solana user-transaction throughput by ~3.3×.
+
+**Fix:** Default changed to `vote_tx_pct=SOLANA_VOTE_TX_PCT_REALISTIC = 0.70`. Callers needing the old zero-overhead behaviour must now pass `vote_tx_pct=0.0` explicitly.
+
+### 11.8 SLH-DSA f/s Naming — DOCUMENTED (VER-1)
+
+Inline comments added to every SLH-DSA entry in `VERIFICATION_PROFILES`. The counter-intuitive FIPS 205 naming convention ("f" = fast signing, slow verification; "s" = slow signing, fast verification) is now flagged directly at each entry, not only in the file header. `SLH-DSA-128f` verifies 2.75× slower than `SLH-DSA-128s`.
+
+### 11.9 Falcon Batch Verification Speedup — ✅ FIXED (VER-2)
+
+**Previous value:** `Falcon-512 batch_speedup = 1.0` (no batch speedup). Falcon verification uses an NTT over a polynomial ring; shared NTT butterfly computations across multiple signatures yield an empirical 30–40% per-signature speedup in batch mode.
+
+**Fix:** `Falcon-512 batch_speedup = 0.65` (35% speedup; conservative vs Ed25519 Bos-Coster 50%). `Falcon-1024` updated identically. For validators processing many Falcon signatures per slot, this reduces the verification bottleneck estimate. The impact is modest because batch verification is only invoked when `use_batch=True` in `compute_block_verification_time()`.
+
+**Source:** Falcon NIST round-3 submission, Section 3.11.1; OQS team NTT pipelining notes.
+
+### 11.10 Dead Code and Variable Shadow — ✅ FIXED (ENG-1, ENG-2)
+
+**ENG-1:** `DESEngine._select_gossip_peers()` removed. The method was explicitly labelled `[DEPRECATED — dead code]` and was never called in any code path. The "downstream forks" justification for retaining it does not apply to an academic codebase.
+
+**ENG-2:** Duplicate `total_blocks = len(self.state.blocks_proposed)` assignment in `_compute_results()` removed. The second assignment was identical to the first and served no purpose.
