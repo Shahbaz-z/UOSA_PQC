@@ -1,3 +1,7 @@
+#Current Update
+
+Happy to announce this project has been accepted for a Superteam UK Foundation Grant!!!
+
 # PQC Cross-Chain Simulator
 
 A discrete-event simulation framework quantifying how post-quantum cryptography (PQC) signatures affect throughput, propagation, and stale rates in real blockchain networks — **Solana**, **Bitcoin**, and **Ethereum**.
@@ -177,5 +181,5 @@ ASSUMPTIONS_AND_LIMITATIONS.md  All assumptions, simplifications, and known limi
 ## Author
 
 **Shahbaz Zulkernain**
-MPhys Physics, University of St Andrews (Class of 2028)
+BSc Physics, University of St Andrews (Class of 2027)
 St Andrews Blockchain Society — PQC Research Lead
