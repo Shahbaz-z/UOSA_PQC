@@ -1,4 +1,4 @@
-#Current Update
+Current Update
 
 Happy to announce this project has been accepted for a Superteam UK Foundation Grant!!!
 
