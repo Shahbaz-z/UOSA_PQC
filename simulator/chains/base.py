@@ -58,7 +58,7 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
         baseline_algorithm="Ed25519",
         target_validators=1500,       # Mainnet validator count
         gossip_fanout=200,            # Turbine fanout (high for speed)
-        baseline_stale_rate=0.05,     # ~5% slot skip rate
+        baseline_stale_rate=0.015,     # ~1.5% slot skip rate # fixed
         propagation_tx_overhead_bytes=250,  # Same as base_tx_overhead (bytes)
         routing_strategy="turbine",
     ),
